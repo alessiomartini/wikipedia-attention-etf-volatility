@@ -1,0 +1,365 @@
+# ---------------------------------------------------------------------------
+# Tier 1 universe: listed fashion, luxury and premium-consumer companies.
+#
+# WHY THIS IS A CONFIG FILE AND NOT PYTHON
+# The whole point of the design (see DESIGN.md section 2.3) is that the
+# infrastructure is universe-agnostic: Tier 2 is the STOXX 600 + S&P 500, and
+# it must run through exactly the same code path with no edits. A universe is
+# therefore data, never a code branch.
+#
+# WHY THIS LIST IS ONLY A SEED
+# Hand-picking companies is precisely the practice the protocol is meant to
+# rule out. This file exists so the pilot can run today; the authoritative
+# universe is built by `wikidata.discover_listed_companies()`, which selects
+# every entity with a stock-exchange listing (P414) in a chosen industry (P452)
+# with no human in the loop. When the two disagree, the Wikidata list wins and
+# the disagreement is a finding worth reporting.
+#
+# SURVIVORSHIP BIAS
+# Delisted names are kept, with `delisted_on` set. Removing them because their
+# series ends early is the textbook way to manufacture a result: the survivors
+# are, by construction, the companies whose attention shocks did not kill them.
+# The panel is unbalanced on purpose.
+#
+# NOTHING HERE IS TRUSTED UNTIL THE VALIDATOR RUNS
+# These tickers and article titles were written without network access. Run
+#   python -m attention_panel.cli validate-universe config/universe_luxury.yaml
+# before trusting any of them: it reports every symbol that does not resolve to
+# a usable price series on both yfinance and Stooq, and every article title
+# that does not exist on en.wikipedia.
+#
+# WHY THERE ARE NO WIKIDATA QIDs IN THIS FILE
+# Writing QIDs by hand is error-prone and silently wrong -- a mistyped QID
+# resolves to a real but unrelated entity, which no schema check would catch.
+# The QID is instead looked up from the `corporate` article title at load time
+# (MediaWiki `prop=pageprops&ppprop=wikibase_item`), so the only identifier a
+# human has to get right is one an author can actually read and verify.
+# ---------------------------------------------------------------------------
+
+name: luxury_fashion_tier1
+description: >
+  Listed fashion, luxury and premium-consumer companies used as the
+  pre-registered pilot study. Wide enough for a panel, narrow enough that the
+  multilingual attention channel has a genuine economic interpretation.
+
+# Languages fetched for every entity. See DESIGN.md section 2.4 for the caveat
+# that zh.wikipedia does NOT measure mainland Chinese readership -- Wikipedia
+# has been blocked in mainland China since 2019, so zh is a Greater-China-
+# ex-mainland proxy and ja/ko are the cleaner Asian demand signals.
+languages: [en, it, fr, de, es, ja, ko, zh]
+
+# Sector-wide theme articles. These are NOT attached to any single company:
+# they enter the panel as common factors (see DESIGN.md section 3), so that a
+# Met Gala spike is absorbed as a sector event rather than being attributed to
+# whichever brand happens to be most read that week.
+theme_terms:
+  - Fashion week
+  - Met Gala
+  - Quiet luxury
+  - Luxury goods
+  - Counterfeit consumer goods
+  - Fast fashion
+  - Haute couture
+  - Sneaker collecting
+
+companies:
+
+  # --- Europe: hard luxury and conglomerates -------------------------------
+  - ticker: MC.PA
+    name: LVMH
+    articles:
+      corporate: LVMH
+      brands: [Louis Vuitton, Christian Dior (fashion house), Moët & Chandon, Bulgari, Tiffany & Co., Fendi, Celine (brand), Loewe (brand)]
+      people: [Bernard Arnault, Delphine Arnault, Pharrell Williams]
+
+  - ticker: RMS.PA
+    name: Hermes International
+    articles:
+      corporate: Hermès
+      brands: [Birkin bag, Kelly bag]
+      people: [Axel Dumas, Pierre-Alexis Dumas]
+
+  - ticker: KER.PA
+    name: Kering
+    articles:
+      corporate: Kering
+      brands: [Gucci, Yves Saint Laurent (brand), Balenciaga, Bottega Veneta, Alexander McQueen (brand)]
+      people: [François-Henri Pinault, Demna]
+
+  - ticker: CFR.SW
+    name: Compagnie Financiere Richemont
+    articles:
+      corporate: Richemont
+      brands: [Cartier (jeweler), Van Cleef & Arpels, IWC Schaffhausen, Jaeger-LeCoultre, Montblanc (company)]
+      people: [Johann Rupert]
+
+  - ticker: UHR.SW
+    name: Swatch Group
+    articles:
+      corporate: The Swatch Group
+      brands: [Omega SA, Longines, Tissot, Swatch, Breguet (brand)]
+      people: [Nick Hayek Jr.]
+
+  - ticker: CDI.PA
+    name: Christian Dior SE
+    # NOTE: the holding company and the fashion house are distinct Wikipedia
+    # articles that a naive title match collapses. Keeping them separate is the
+    # difference between measuring investor attention and consumer attention.
+    articles:
+      corporate: Christian Dior SE
+      brands: [Christian Dior (fashion house), Dior Homme]
+      people: [Maria Grazia Chiuri]
+
+  - ticker: 1913.HK
+    name: Prada
+    articles:
+      corporate: Prada
+      brands: [Miu Miu]
+      people: [Miuccia Prada, Raf Simons]
+
+  - ticker: MONC.MI
+    name: Moncler
+    articles:
+      corporate: Moncler
+      brands: [Stone Island]
+      people: [Remo Ruffini]
+
+  - ticker: BC.MI
+    name: Brunello Cucinelli
+    articles:
+      corporate: Brunello Cucinelli (company)
+      people: [Brunello Cucinelli]
+
+  - ticker: SFER.MI
+    name: Salvatore Ferragamo
+    articles:
+      corporate: Salvatore Ferragamo S.p.A.
+      people: [Salvatore Ferragamo]
+
+  - ticker: ZGN
+    name: Ermenegildo Zegna
+    articles:
+      corporate: Ermenegildo Zegna
+      brands: [Thom Browne]
+
+  - ticker: TOD.MI
+    name: Tod's
+    delisted_on: 2024-11-01   # taken private; series ends here, kept on purpose
+    articles:
+      corporate: Tod's
+      brands: [Roger Vivier]
+
+  - ticker: BRBY.L
+    name: Burberry
+    articles:
+      corporate: Burberry
+      people: [Daniel Lee (fashion designer)]
+
+  - ticker: PNDORA.CO
+    name: Pandora A/S
+    articles:
+      corporate: Pandora (jewelry)
+
+  - ticker: WOSG.L
+    name: Watches of Switzerland
+    articles:
+      corporate: Watches of Switzerland Group
+
+  # --- Europe: apparel, sportswear, beauty ---------------------------------
+  - ticker: ADS.DE
+    name: adidas
+    articles:
+      corporate: Adidas
+      brands: [Yeezy, Adidas Samba, Adidas Superstar]
+      people: [Bjørn Gulden, Kanye West]
+
+  - ticker: PUM.DE
+    name: Puma SE
+    articles:
+      corporate: Puma (brand)
+
+  - ticker: BOSS.DE
+    name: Hugo Boss
+    articles:
+      corporate: Hugo Boss
+
+  - ticker: ZAL.DE
+    name: Zalando
+    articles:
+      corporate: Zalando
+
+  - ticker: ITX.MC
+    name: Inditex
+    articles:
+      corporate: Inditex
+      brands: [Zara (retailer), Massimo Dutti, Bershka, Pull&Bear]
+      people: [Amancio Ortega, Marta Ortega]
+
+  - ticker: HM-B.ST
+    name: H&M
+    articles:
+      corporate: H&M
+      brands: [COS (clothing)]
+
+  - ticker: OR.PA
+    name: L'Oreal
+    articles:
+      corporate: L'Oréal
+      brands: [Lancôme, Maybelline, Kiehl's]
+
+  - ticker: EL.PA
+    name: EssilorLuxottica
+    # WARNING: `EL.PA` is EssilorLuxottica in Paris; bare `EL` is Estee Lauder
+    # in New York. The two are different companies. Any code that strips the
+    # exchange suffix will silently merge them.
+    articles:
+      corporate: EssilorLuxottica
+      brands: [Ray-Ban, Oakley, Inc., Persol]
+
+  - ticker: BEI.DE
+    name: Beiersdorf
+    articles:
+      corporate: Beiersdorf
+      brands: [Nivea, La Prairie (company)]
+
+  # --- United States -------------------------------------------------------
+  - ticker: NKE
+    name: Nike
+    articles:
+      corporate: Nike, Inc.
+      brands: [Air Jordan, Nike Air Max, Converse (brand)]
+      people: [Phil Knight, Elliott Hill]
+
+  - ticker: LULU
+    name: Lululemon
+    articles:
+      corporate: Lululemon Athletica
+
+  - ticker: RL
+    name: Ralph Lauren
+    articles:
+      corporate: Ralph Lauren Corporation
+      people: [Ralph Lauren]
+
+  - ticker: TPR
+    name: Tapestry
+    articles:
+      corporate: Tapestry, Inc.
+      brands: [Coach New York, Kate Spade New York, Stuart Weitzman]
+
+  - ticker: CPRI
+    name: Capri Holdings
+    articles:
+      corporate: Capri Holdings
+      brands: [Michael Kors, Versace, Jimmy Choo]
+
+  - ticker: EL
+    name: Estee Lauder
+    articles:
+      corporate: The Estée Lauder Companies
+      brands: [MAC Cosmetics, Clinique, La Mer (brand)]
+
+  - ticker: PVH
+    name: PVH Corp
+    articles:
+      corporate: PVH (company)
+      brands: [Calvin Klein, Tommy Hilfiger]
+
+  - ticker: VFC
+    name: VF Corporation
+    articles:
+      corporate: VF Corporation
+      brands: [The North Face, Vans, Supreme (brand), Timberland (brand)]
+
+  - ticker: LEVI
+    name: Levi Strauss
+    articles:
+      corporate: Levi Strauss & Co.
+      brands: [Levi's 501]
+
+  - ticker: DECK
+    name: Deckers Outdoor
+    articles:
+      corporate: Deckers Brands
+      brands: [Ugg (brand), Hoka]
+
+  - ticker: SKX
+    name: Skechers
+    articles:
+      corporate: Skechers
+
+  - ticker: CROX
+    name: Crocs
+    articles:
+      corporate: Crocs
+
+  - ticker: UAA
+    name: Under Armour
+    articles:
+      corporate: Under Armour
+
+  - ticker: ONON
+    name: On Holding
+    articles:
+      corporate: On (company)
+
+  - ticker: BIRK
+    name: Birkenstock
+    articles:
+      corporate: Birkenstock
+
+  - ticker: GOOS
+    name: Canada Goose
+    articles:
+      corporate: Canada Goose (clothing)
+
+  - ticker: COTY
+    name: Coty Inc
+    articles:
+      corporate: Coty, Inc.
+
+  - ticker: SIG
+    name: Signet Jewelers
+    articles:
+      corporate: Signet Jewelers
+
+  - ticker: ANF
+    name: Abercrombie & Fitch
+    articles:
+      corporate: Abercrombie & Fitch
+
+  - ticker: URBN
+    name: Urban Outfitters
+    articles:
+      corporate: Urban Outfitters
+
+  # --- Asia ----------------------------------------------------------------
+  - ticker: 9983.T
+    name: Fast Retailing
+    articles:
+      corporate: Fast Retailing
+      brands: [Uniqlo]
+      people: [Tadashi Yanai]
+
+  - ticker: 4911.T
+    name: Shiseido
+    articles:
+      corporate: Shiseido
+
+  - ticker: 1910.HK
+    name: Samsonite
+    articles:
+      corporate: Samsonite
+      brands: [Tumi Inc.]
+
+  - ticker: 2020.HK
+    name: Anta Sports
+    articles:
+      corporate: Anta Sports
+      brands: [Fila (company), Salomon Group, Arc'teryx]
+
+  - ticker: 2331.HK
+    name: Li Ning
+    articles:
+      corporate: Li-Ning
+      people: [Li Ning]

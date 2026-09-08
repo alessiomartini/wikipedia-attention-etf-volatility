@@ -60,12 +60,13 @@ Rationale, and it is the central methodological choice of the project:
 Standard errors clustered by **entity and by date** (two-way), because attention
 shocks are correlated across firms on the same day.
 
-### 2.3 Universe **[PROPOSED]**
+### 2.3 Universe **[DECIDED]**
 
 Two tiers, run in this order and reported separately:
 
-**Tier 1 — pilot, pre-registered primary study.** ~25 listed fashion & luxury
-names, where the multilingual angle has a genuine economic interpretation:
+**Tier 1 — pilot, pre-registered primary study.** 49 listed fashion, luxury and
+premium-consumer names, where the multilingual angle has a genuine economic
+interpretation. The list lives in `config/universe_luxury.yaml`; a sample:
 
 `MC.PA` LVMH · `RMS.PA` Hermès · `KER.PA` Kering · `CFR.SW` Richemont ·
 `MONC.MI` Moncler · `BRBY.L` Burberry · `1913.HK` Prada · `CPRI` Capri ·
@@ -149,7 +150,7 @@ Raw pageview counts are non-stationary and have strong weekly seasonality
 
 ## 4. Targets
 
-Three targets, in a strict hierarchy, all at `t+1`:
+Three targets **[DECIDED]**, in a strict hierarchy, all at `t+1`:
 
 | # | Target | Role |
 | --- | --- | --- |
@@ -255,10 +256,42 @@ Where screening *is* run, as explicit discovery:
 
 ---
 
-## 9. Open items
+## 9. Data sources **[DECIDED]**
 
-- **[OPEN]** Confirmation of the three-target hierarchy in §4.
-- **[OPEN]** Tier-1 universe list — 25 names above is a proposal.
-- **[OPEN]** Market data source. `yfinance` is free but fragile; a paid daily
-  OHLCV source would remove a whole class of silent failures.
-- **[OPEN]** Whether Tier 2 uses point-in-time index membership.
+All free, no API key anywhere in the pipeline.
+
+| Layer | Source | Role |
+| --- | --- | --- |
+| Attention | Wikimedia Pageviews API | daily per-article, per-language series |
+| Article identity | MediaWiki Action API | canonical titles, redirect graph, page moves, QIDs |
+| Universe | Wikidata SPARQL | listings (P414), tickers (P249), ISIN (P946), sitelinks |
+| Market | `yfinance` | primary daily OHLCV |
+| Market | Stooq CSV | independent cross-check |
+
+**Two free price sources rather than one paid one.** `yfinance` scrapes an
+undocumented endpoint and breaks periodically; the usual remedy is a vendor
+subscription. But the failure mode that actually threatens the result is not
+downtime — it is a silently wrong bar. An unadjusted split, a stale close or a
+zero-volume placeholder raises nothing and simply changes the answer. Two
+independent sources that disagree make that visible, which no single source of
+any price can. Stooq is free, needs no API key, and covers European venues with
+decades of history, so the cross-check costs nothing.
+
+**The adjustment trap.** Garman–Klass uses only within-day ratios (H/L, C/O), so
+a corporate-action factor applied to all four prices of a day cancels out. The
+danger is a bar adjusted *inconsistently*: with `auto_adjust=False`, Yahoo
+returns raw OHLC alongside a separately adjusted close, and mixing the raw high
+with the adjusted close produces a meaningless range on every split day. The
+ingestion layer always requests consistently adjusted OHLC, and a test asserts
+the invariance directly rather than trusting the claim.
+
+---
+
+## 10. Open items
+
+- **[OPEN]** Whether Tier 2 uses point-in-time index membership. Until it does,
+  Tier 2 results carry survivorship bias and must be reported with it stated.
+- **[OPEN]** Reconstructing the *historical* redirect graph rather than using
+  the current one.
+- **[OPEN]** Whether theme-article attention enters as a common factor or as a
+  per-company exposure estimated in a first stage.

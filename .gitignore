@@ -1,5 +1,15 @@
-venv/
-.idea/
-data/
+# Byte-compiled
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Fetched data and HTTP cache. Everything under these directories is
+# reproducible from the APIs, so it is deliberately not versioned: the repo
+# stores the code that builds the panel, never the panel itself.
+data/
+.httpcache/

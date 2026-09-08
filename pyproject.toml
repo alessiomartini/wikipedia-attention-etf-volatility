@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attention-panel"
+version = "0.1.0"
+description = "Does Wikipedia attention carry information about next-day trading activity and realized volatility?"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Ingestion tests must never touch the network: every test runs against
+# recorded fixtures. A test that needs a live API is marked `network` and
+# excluded by default.
+addopts = "-m 'not network'"
+markers = ["network: test requires live API access (excluded by default)"]
