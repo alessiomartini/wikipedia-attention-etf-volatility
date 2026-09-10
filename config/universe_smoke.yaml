@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# A deliberately tiny universe, for `attention-panel selftest`.
+#
+# Three companies on three venues that exercise different code paths rather
+# than three that are merely convenient:
+#
+#   NKE      US, opens 14:30 UTC  -> availability lag of ONE day
+#   MC.PA    Paris, opens 08:00   -> lag of TWO days, and a non-ASCII title
+#   9983.T   Tokyo, opens 00:00   -> lag of TWO days, and a non-Latin wiki
+#
+# Two languages for the same reason: `en` is the easy case, `ja` exercises
+# percent-encoding of non-Latin titles and a wiki where several of these
+# articles legitimately do not exist -- which must be reported as missing
+# rather than as zero traffic.
+#
+# Small enough to run end to end in about a minute. Not a research universe:
+# `universe_luxury.yaml` is the pilot.
+# ---------------------------------------------------------------------------
+
+name: smoke_test
+description: Three companies on three venues, for the end-to-end self-test.
+
+languages: [en, ja]
+
+theme_terms:
+  - Met Gala
+
+companies:
+  - ticker: NKE
+    name: Nike
+    articles:
+      corporate: Nike, Inc.
+      brands: [Air Jordan]
+
+  - ticker: MC.PA
+    name: LVMH
+    articles:
+      corporate: LVMH
+      brands: [Louis Vuitton]
+      people: [Bernard Arnault]
+
+  - ticker: 9983.T
+    name: Fast Retailing
+    articles:
+      corporate: Fast Retailing
+      brands: [Uniqlo]

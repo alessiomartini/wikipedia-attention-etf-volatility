@@ -221,7 +221,8 @@ noise; it attenuates the events the study is about.
 
 ```
 DESIGN.md                        the research protocol, written before the code
-config/universe_luxury.yaml      Tier-1 pilot universe (49 names, unverified until validated)
+config/universe_luxury.yaml      Tier-1 pilot universe (48 names, unverified until validated)
+config/universe_smoke.yaml       3 companies on 3 venues, for the end-to-end self-test
 src/attention_panel/
   config.py                      universe loading; a universe is data, never a code branch
   httpcache.py                   polite HTTP: descriptive UA, backoff, settled-vs-volatile cache
@@ -295,6 +296,12 @@ Or skip the variable and pass `--user-agent "..."` on each command.
 ### The commands
 
 ```bash
+# 0. Does the whole thing work against the live APIs? ~1 minute, 3 companies.
+#    The unit tests run on recorded payloads, deliberately -- a suite that goes
+#    red because Wikimedia is slow trains everyone to ignore red tests. This is
+#    the complementary check: are the real APIs still behaving?
+attention-panel selftest config/universe_smoke.yaml
+
 # 1. What would a full fetch cost? Offline, issues no requests.
 attention-panel plan config/universe_luxury.yaml
 

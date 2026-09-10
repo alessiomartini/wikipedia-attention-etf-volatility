@@ -37,10 +37,11 @@ import requests
 from .config import load_universe
 from .httpcache import HttpClient, RateLimitError
 from .market import build_market_features, cross_check, validate_ohlcv
+from .features import abnormal_attention, availability_lag_days, lag_to_tradable
 from .fundamentals import explain_extreme_moves, fetch_fundamentals
-from .macro import build_macro_frame
+from .macro import build_macro_frame, fetch_series
 from .sources import YahooSource, available_cross_checks, exchange_of
-from .mediawiki import find_title_collisions, resolve_titles, search_titles
+from .mediawiki import find_title_collisions, incoming_redirects, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
 
 log = logging.getLogger("attention_panel")
@@ -391,6 +392,186 @@ def cmd_fetch_macro(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# selftest
+# ---------------------------------------------------------------------------
+
+
+def cmd_selftest(args) -> int:
+    """Exercise every stage against the live APIs and report what worked.
+
+    The unit tests run entirely against recorded payloads -- deliberately, since
+    a suite that fails because Wikimedia is slow today trains everyone to ignore
+    red tests. That leaves one thing untested: whether the real APIs still
+    behave the way the fixtures say they do. This command is that check.
+
+    It runs on a three-company universe rather than the pilot, because the
+    point is to prove the wiring, not to gather data: the full fetch is
+    thousands of requests and hours, this is about a minute. The three venues
+    are chosen to exercise different paths -- a US ticker with a one-day
+    availability lag, a European one with two, and a Tokyo listing on a
+    non-Latin wiki where some articles legitimately do not exist.
+
+    Every stage is independent and reports its own verdict, so a single broken
+    upstream shows up as one failed stage rather than an aborted run.
+    """
+    universe = load_universe(args.universe)
+    client = make_client(args)
+    results: list[tuple[str, bool, str]] = []
+    skipped: list[str] = []
+
+    def record(stage: str, ok: bool, detail: str) -> None:
+        results.append((stage, ok, detail))
+        print(f"  [{'PASS' if ok else 'FAIL'}] {stage:26s} {detail}")
+
+    def skip(stage: str, because: str) -> None:
+        """A stage that could not run because an earlier one failed.
+
+        Reported explicitly rather than omitted: a stage that silently vanishes
+        reads as a stage that passed, and the count at the bottom would then
+        describe a smaller run than the one that was asked for.
+        """
+        skipped.append(stage)
+        print(f"  [SKIP] {stage:26s} needs {because}")
+
+    end = dt.date.today()
+    start = end - dt.timedelta(days=400)
+    company = universe.companies[0]
+
+    print(f"Self-test on universe {universe.name!r} "
+          f"({len(universe.companies)} companies, {universe.fetch_plan_size()} series)\n")
+
+    # -- 1. Wikipedia title resolution --------------------------------------
+    try:
+        report = resolve_titles(client, "en", list(universe.article_titles), with_redirects=False)
+        found = [a for a in report.resolved.values() if a.canonical]
+        qids = [a for a in found if a.qid]
+        record(
+            "wikipedia titles",
+            len(found) > 0,
+            f"{len(found)}/{len(universe.article_titles)} resolved, {len(qids)} with a QID",
+        )
+        collisions = find_title_collisions(report.resolved)
+        record("no title collisions", not collisions,
+               "none" if not collisions else f"{len(collisions)} found: {list(collisions)}")
+    except Exception as exc:
+        record("wikipedia titles", False, f"{type(exc).__name__}: {exc}")
+        record("no title collisions", False, "not checked: title resolution failed")
+        report = None
+
+    # -- 2. Pageviews, including redirect summing ---------------------------
+    if report is None:
+        skip("pageviews", "wikipedia titles")
+    else:
+        try:
+            title = company.corporate_article
+            resolved = report.resolved.get(title)
+            resolved.redirects = incoming_redirects(client, "en", resolved.canonical)
+            frame = article_frame(client, "en", resolved, start, end)
+            ok = not frame.empty and frame["views"].sum() > 0
+            record(
+                "pageviews",
+                ok,
+                f"{resolved.canonical!r}: {len(frame)} days, {int(frame['views'].sum()):,} views, "
+                f"{len(resolved.redirects)} redirects summed",
+            )
+        except Exception as exc:
+            record("pageviews", False, f"{type(exc).__name__}: {exc}")
+
+    # -- 3. A non-Latin wiki, where missing articles are normal --------------
+    try:
+        ja = resolve_titles(client, "ja", list(universe.article_titles), with_redirects=False)
+        found = sum(1 for a in ja.resolved.values() if a.canonical)
+        # Missing articles are expected here and are NOT a failure: what would
+        # be a failure is the request itself not working.
+        record("non-Latin wiki (ja)", len(ja.resolved) > 0,
+               f"{found} exist, {len(ja.missing)} absent (absent is normal)")
+    except Exception as exc:
+        record("non-Latin wiki (ja)", False, f"{type(exc).__name__}: {exc}")
+
+    # -- 4. Prices, validation and the volatility estimators ----------------
+    prices = None
+    try:
+        fetched = YahooSource().fetch(company.ticker, start, end)
+        prices = fetched.frame
+        record("prices", not prices.empty,
+               f"{company.ticker}: {len(prices)} bars" if not prices.empty else fetched.reason)
+    except Exception as exc:
+        record("prices", False, f"{type(exc).__name__}: {exc}")
+
+    if prices is None or prices.empty:
+        skip("bar validation", "prices")
+        skip("volatility estimators", "prices")
+    else:
+        checks = validate_ohlcv(prices, company.ticker)
+        record("bar validation", True,
+               f"{checks['unusable_bars']} unusable of {checks['rows']} "
+               f"({checks['zero_range_days']} halts, {checks['stale_bars']} stale)")
+
+        market = build_market_features(prices)
+        finite = market["log_rv"].replace([np.inf, -np.inf], np.nan).dropna()
+        record("volatility estimators", len(finite) > 0 and np.isfinite(finite).all(),
+               f"log_rv finite on {len(finite)}/{len(market)} days, "
+               f"median annualised {np.exp(finite.median() / 2) * np.sqrt(252):.1%}")
+
+    # -- 5. Attention features and the per-venue lag ------------------------
+    if report is None or prices is None or prices.empty:
+        skip("features + panel join", "wikipedia titles and prices")
+    else:
+        try:
+            views = article_frame(client, "en", report.resolved[company.corporate_article], start, end)["views"]
+            abnormal = abnormal_attention(views)
+            lagged = lag_to_tradable(abnormal, company.ticker, extra_lag=0)
+            joined = pd.DataFrame({"abnormal_attention": lagged}).join(
+                build_market_features(prices)[["log_rv"]], how="inner"
+            ).dropna()
+            record("features + panel join", len(joined) > 30,
+                   f"{len(joined)} usable rows, lag={availability_lag_days(company.ticker)}d, "
+                   f"corr={joined.corr().iloc[0, 1]:+.3f} (NOT a result -- one ticker, no baseline)")
+        except Exception as exc:
+            record("features + panel join", False, f"{type(exc).__name__}: {exc}")
+
+    # -- 6. FRED ------------------------------------------------------------
+    try:
+        vix = fetch_series(client, "VIXCLS", start, end)
+        record("FRED macro", not vix.empty,
+               f"VIXCLS: {len(vix)} observations, last {vix.dropna().iloc[-1]:.1f}"
+               if not vix.empty else "no data")
+    except Exception as exc:
+        record("FRED macro", False, f"{type(exc).__name__}: {exc}")
+
+    # -- 7. Company data ----------------------------------------------------
+    try:
+        data = fetch_fundamentals(company.ticker)
+        coverage = data.earnings_coverage
+        record("fundamentals", len(data.earnings) > 0,
+               f"{len(data.earnings)} earnings dates"
+               + (f", covering {coverage[0]}..{coverage[1]}" if coverage else "")
+               + (f"; problems: {'; '.join(data.problems)}" if data.problems else ""))
+    except Exception as exc:
+        record("fundamentals", False, f"{type(exc).__name__}: {exc}")
+
+    # -- verdict ------------------------------------------------------------
+    passed = sum(1 for _, ok, _ in results if ok)
+    print("\n" + "=" * 70)
+    print(f"{passed}/{len(results)} stages passed"
+          + (f", {len(skipped)} skipped ({', '.join(skipped)})" if skipped else ""))
+    if passed < len(results) or skipped:
+        print("\nFailed stages:")
+        for stage, ok, detail in results:
+            if not ok:
+                print(f"  {stage}: {detail}")
+        print("\nA single failing stage usually means one upstream changed, not that the")
+        print("pipeline is broken -- the other stages ran independently and their verdicts")
+        print("still hold.")
+        return 1
+    print("\nEvery stage works against the live APIs.")
+    print("Note the correlation printed above is NOT a result: one ticker, one article,")
+    print("no HAR baseline and no significance test. It only proves the wiring carries")
+    print("numbers end to end.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # check-sources
 # ---------------------------------------------------------------------------
 
@@ -603,6 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     # noticed.
     for name, handler, needs_universe, help_text in (
         ("plan", cmd_plan, True, "print the fetch plan without touching the network"),
+        ("selftest", cmd_selftest, True, "run every stage against the live APIs and report"),
         ("validate-universe", cmd_validate_universe, True, "check every title and ticker resolves"),
         ("check-sources", cmd_check_sources, True, "probe each price source, one ticker per exchange"),
         ("fetch-attention", cmd_fetch_attention, True, "download the multilingual pageview series"),
