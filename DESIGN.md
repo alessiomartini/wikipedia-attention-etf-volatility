@@ -459,7 +459,61 @@ backwards, since filling backwards would invent a count from a later buyback.
 
 ---
 
-## 12. Universe change log
+## 12. Panel assembly: the calendar mismatch **[DECIDED]**
+
+Attention exists every day. Markets do not. Wikipedia records traffic on
+Saturdays, Sundays and Christmas; the exchange records nothing, and this design
+did not say what to do about it. Both obvious answers are wrong:
+
+- **Take the last available value** → discards the weekend. That is roughly two
+  sevenths of all attention, and *not a random two sevenths*: a scandal
+  breaking on a Saturday is precisely the kind of event the hypothesis is about.
+- **Sum everything since the previous session** → double-counts. Abnormal
+  attention is a standardised level, not a flow, so three days of ordinary
+  interest would read as one day of triple interest.
+
+**Decision:** each trading day takes the **mean** of abnormal attention over the
+calendar days that became newly observable since the previous session. Under a
+two-day availability lag, Monday carries Thursday, Friday and Saturday; Tuesday
+carries Sunday alone. Consecutive windows tile the calendar exactly — a test
+asserts no day is counted twice or skipped — so nothing is dropped, nothing is
+double-counted, and a quiet weekend cannot masquerade as a spike.
+
+### Two shifts, kept separate
+
+Conflating them is how look-ahead bugs are born, so they are named apart:
+
+1. **Availability** — was this number public when the session opened? Venue
+   dependent (§2.1): one day for New York, two for Tokyo, Hong Kong and Europe.
+2. **Horizon** — the target is the *next* day's volatility, so the target column
+   is shifted back by one relative to the features.
+
+Features on row `t` are knowable at the open of `t`; the target on row `t` is
+realised over `t+1`.
+
+### The finished panel is checked, not trusted
+
+`assert_no_lookahead` re-derives the guarantees on the assembled frame:
+no feature may correlate above 0.999 with the target (the signature of the
+target having leaked in under another name), and every row's recorded
+availability lag must match the venue rule.
+
+The reason for checking output rather than trusting the pipeline is empirical.
+**Every look-ahead bug in this project so far was introduced by code that
+believed it was maintaining the discipline** — the uniform one-day lag, a
+full-sample weekday adjustment, the FRED monthly stamp. A structural assertion
+on the finished panel is what catches the next one.
+
+### The panel stays unbalanced
+
+Delisted names keep their shortened series (§2.3). Companies with fewer than
+250 usable rows are dropped and the drop is logged rather than silent: an
+entity contributing thirty rows still absorbs a fixed effect, spending a degree
+of freedom on a company the panel cannot say anything about.
+
+---
+
+## 13. Universe change log
 
 A pre-registered universe that changes without a record is not pre-registered.
 Every change made after the file was first written is listed here, with the
@@ -502,7 +556,7 @@ anything.
 
 ---
 
-## 13. Open items
+## 14. Open items
 
 - **[OPEN]** Whether Tier 2 uses point-in-time index membership. Until it does,
   Tier 2 results carry survivorship bias and must be reported with it stated.

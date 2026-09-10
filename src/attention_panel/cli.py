@@ -41,6 +41,7 @@ from .features import abnormal_attention, availability_lag_days, lag_to_tradable
 from .fundamentals import explain_extreme_moves, fetch_fundamentals
 from .macro import build_macro_frame, fetch_series
 from .sources import YahooSource, available_cross_checks, exchange_of
+from .store import DataStore, merge_incremental
 from .mediawiki import find_title_collisions, incoming_redirects, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
 
@@ -729,13 +730,38 @@ def cmd_fetch_market(args) -> int:
     start, end = _date_range(args)
     out_dir = Path(args.out) / "market"
     out_dir.mkdir(parents=True, exist_ok=True)
+    store = DataStore(Path(args.out) / "store")
 
     quality: list[dict] = []
     for company in universe.companies:
-        fetched = primary.fetch(company.ticker, start, end)
-        yahoo = fetched.frame
+        # yfinance does its own networking and never touches the HTTP cache, so
+        # without the store every run re-downloaded every bar of every ticker.
+        window = None if args.refresh else store.missing_window("prices", company.ticker, start, end)
+        stored = None if args.refresh else store.load("prices", company.ticker)
+
+        if window is None and stored is not None:
+            yahoo = stored.loc[str(start) : str(end)]
+            log.info("%s: served from store (%d bars)", company.ticker, len(yahoo))
+        else:
+            fetch_start, fetch_end = window or (start, end)
+            fetched = primary.fetch(company.ticker, fetch_start, fetch_end)
+            if fetched.frame.empty and stored is None:
+                quality.append({"ticker": company.ticker, "error": fetched.reason or "no data"})
+                continue
+            outcome = merge_incremental(stored, fetched.frame)
+            if outcome.action == "replaced":
+                # A split re-adjusted the whole history, so the stored rows are
+                # on a different scale. The partial window just fetched is not
+                # enough: the full series has to come down again.
+                log.warning("%s: %s", company.ticker, outcome.detail)
+                refetched = primary.fetch(company.ticker, start, end)
+                outcome = merge_incremental(None, refetched.frame)
+            store.save("prices", company.ticker, outcome.frame, source=primary.name)
+            log.info("%s: %s (%s)", company.ticker, outcome.action, outcome.detail)
+            yahoo = outcome.frame.loc[str(start) : str(end)]
+
         if yahoo.empty:
-            quality.append({"ticker": company.ticker, "error": fetched.reason or "no data"})
+            quality.append({"ticker": company.ticker, "error": "no rows in window"})
             continue
 
         checks = validate_ohlcv(yahoo, company.ticker)
@@ -759,6 +785,32 @@ def cmd_fetch_market(args) -> int:
     pd.DataFrame(quality).to_csv(quality_path, index=False)
     print(f"wrote {quality_path}")
     print(json.dumps({"tickers": len(universe.companies), "written": len(quality)}, indent=2))
+    print(f"\nprice history is stored under {store.root}; a second run fetches only")
+    print(f"the last {5} days of each series unless --refresh is passed.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# store-status
+# ---------------------------------------------------------------------------
+
+
+def cmd_store_status(args) -> int:
+    """What is already downloaded, and when it was fetched.
+
+    The fetch date is part of the answer, not decoration: a series that gets
+    revised has vintages, and a result that cannot say which vintage produced
+    it cannot be rerun.
+    """
+    store = DataStore(Path(args.out) / "store")
+    summary = store.summary()
+    if summary.empty:
+        print(f"store at {store.root} is empty -- nothing has been fetched yet")
+        return 0
+
+    print(summary.to_string(index=False))
+    total = int(summary["rows"].astype(int).sum()) if "rows" in summary else 0
+    print(f"\n{len(summary)} datasets, {total:,} rows total, under {store.root}")
     return 0
 
 
@@ -776,6 +828,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", default=None, help="YYYY-MM-DD (default: 2015-07-01)")
     parser.add_argument("--end", default=None, help="YYYY-MM-DD (default: today)")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="ignore the dataset store and re-download everything from scratch",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
     # `needs_universe` is False only for commands that genuinely do not read
@@ -792,6 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("fetch-macro", cmd_fetch_macro, False, "download FRED control series (no API key needed)"),
         ("fetch-fundamentals", cmd_fetch_fundamentals, True,
          "earnings dates, corporate actions, share counts (yfinance)"),
+        ("store-status", cmd_store_status, False, "what is already downloaded, and when"),
     ):
         sub_parser = sub.add_parser(name, help=help_text)
         if needs_universe:

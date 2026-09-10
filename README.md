@@ -234,12 +234,15 @@ src/attention_panel/
   macro.py                       FRED controls, aligned with an explicit publication lag
   features.py                    attention transforms; the per-venue availability lag
   fundamentals.py                earnings dates, corporate actions, share counts
+  store.py                       on-disk datasets, incremental, split-aware
+  panel.py                       assembly: the calendar mismatch and the lag discipline
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           106 tests, none of which touch the network
+tests/                           133 tests, none of which touch the network
 ```
 
-Not yet written: the panel assembly, the HAR baseline, and the significance
-machinery. They are specified in DESIGN.md sections 3–6.
+Not yet written: walk-forward validation with purge and embargo, and the
+significance machinery (Benjamini–Hochberg, block bootstrap, Hansen's SPA).
+They are specified in DESIGN.md sections 5–6.
 
 ---
 
@@ -316,7 +319,10 @@ attention-panel check-sources config/universe_luxury.yaml
 attention-panel fetch-macro
 attention-panel fetch-fundamentals config/universe_luxury.yaml
 
-# 3. Fetch. Settled history is cached permanently, so only the first run pays.
+# 3. Fetch. Nothing is downloaded twice: settled pageview days are cached
+#    permanently, and prices are stored incrementally, so a second run costs
+#    a few days rather than ten years. `--refresh` forces a full re-download.
+attention-panel store-status
 attention-panel fetch-attention config/universe_luxury.yaml
 attention-panel fetch-market    config/universe_luxury.yaml
 
