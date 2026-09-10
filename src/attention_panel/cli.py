@@ -30,12 +30,14 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
 from .config import load_universe
 from .httpcache import HttpClient, RateLimitError
 from .market import build_market_features, cross_check, validate_ohlcv
+from .fundamentals import explain_extreme_moves, fetch_fundamentals
 from .macro import build_macro_frame
 from .sources import YahooSource, available_cross_checks, exchange_of
 from .mediawiki import find_title_collisions, resolve_titles, search_titles
@@ -235,6 +237,19 @@ def cmd_validate_universe(args) -> int:
         total_unusable += int(checks.get("unusable_bars", 0))
         print(line)
 
+        # An extreme move is flagged, never auto-corrected, because silently
+        # adjusting prices makes a dataset untraceable. Matching the flag
+        # against recorded splits is what stops each one costing a manual
+        # check -- and checks that always come back clean stop being made.
+        for day, verdict in explain_extreme_moves(
+            list(checks.get("extreme_move_dates") or []),
+            fetch_fundamentals(company.ticker).splits if checks.get("extreme_moves") else pd.Series(dtype="float64"),
+        ).items():
+            marker = " " if verdict.startswith("explained") else "!"
+            print(f"      {marker} {day}: {verdict}")
+            if verdict.startswith("unexplained"):
+                failures.append(f"{company.ticker}: unexplained move on {day}")
+
     if total_unusable:
         print(f"\n{total_unusable} bars across the universe are unusable and will be")
         print("dropped by the volatility estimators. Flagged bars are NOT a reason to")
@@ -263,6 +278,72 @@ def _title_owners(universe) -> dict[str, list[str]]:
         for article in company.articles:
             owners.setdefault(article.title, []).append(f"{company.ticker}/{article.family.value}")
     return owners
+
+
+# ---------------------------------------------------------------------------
+# fetch-fundamentals
+# ---------------------------------------------------------------------------
+
+
+def cmd_fetch_fundamentals(args) -> int:
+    """Earnings dates, corporate actions, share counts and holder splits.
+
+    All from yfinance, which is already the primary price source: no extra
+    vendor, no key, and it covers all eleven venues in this universe.
+
+    Earnings dates are the important one. They are the datable subset of "news",
+    which DESIGN.md section 8 names as the study's central identification
+    threat: attention and volatility plausibly share a common driver. A control
+    for announcement windows is the most direct answer available to it.
+    """
+    universe = load_universe(args.universe)
+    start, end = _date_range(args)
+    out_dir = Path(args.out) / "fundamentals"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for company in universe.companies:
+        data = fetch_fundamentals(company.ticker)
+        coverage = data.earnings_coverage
+        rows.append(
+            {
+                "ticker": company.ticker,
+                "earnings_dates": len(data.earnings),
+                "earnings_from": coverage[0].isoformat() if coverage else "",
+                "earnings_to": coverage[1].isoformat() if coverage else "",
+                "splits": len(data.splits),
+                "dividends": len(data.dividends),
+                "share_observations": len(data.shares),
+                **{k: v for k, v in data.snapshot.items() if not isinstance(v, (list, dict))},
+                "problems": "; ".join(data.problems),
+            }
+        )
+        if len(data.earnings):
+            pd.Series(1, index=data.earnings, name="earnings").to_csv(
+                out_dir / f"{company.ticker.replace('/', '_')}_earnings.csv"
+            )
+
+    summary = pd.DataFrame(rows)
+    summary_path = Path(args.out) / "fundamentals_summary.csv"
+    summary.to_csv(summary_path, index=False)
+    print(f"wrote {summary_path}")
+
+    # How much of the panel the earnings control actually covers. This is
+    # reported because a partial control silently treated as complete is worse
+    # than no control: days outside coverage are unknown, never "no earnings".
+    with_earnings = summary[summary["earnings_dates"] > 0]
+    print(f"\nearnings dates found for {len(with_earnings)}/{len(summary)} tickers")
+    if len(with_earnings):
+        earliest = with_earnings["earnings_from"].replace("", np.nan).dropna()
+        if len(earliest):
+            print(f"earliest coverage begins {earliest.min()}, "
+                  f"panel starts {start.isoformat()}")
+            print(
+                "\nEverything before a ticker's coverage begins is pd.NA in the earnings\n"
+                "mask, not False. Yahoo's history is shallow, and recording those years as\n"
+                "'no announcements' would be a false statement rather than a missing value."
+            )
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +608,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("fetch-attention", cmd_fetch_attention, True, "download the multilingual pageview series"),
         ("fetch-market", cmd_fetch_market, True, "download and cross-check daily OHLCV"),
         ("fetch-macro", cmd_fetch_macro, False, "download FRED control series (no API key needed)"),
+        ("fetch-fundamentals", cmd_fetch_fundamentals, True,
+         "earnings dates, corporate actions, share counts (yfinance)"),
     ):
         sub_parser = sub.add_parser(name, help=help_text)
         if needs_universe:

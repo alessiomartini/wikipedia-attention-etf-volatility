@@ -406,7 +406,60 @@ choice in the fetch layer would keep it out of the specification.
 
 ---
 
-## 11. Universe change log
+## 11. Company data beyond the price bar **[DECIDED]**
+
+Everything here comes from **yfinance**, which is already the primary price
+source: no extra vendor, no API key, and it covers all eleven venues in this
+universe. Adding a provider for data the existing one carries would be cost
+without benefit.
+
+It supplies four things the design had already committed to and had no source
+for:
+
+| Field | What it answers |
+| --- | --- |
+| Earnings dates | the central identification threat (§8) |
+| Corporate actions | closes the loop on the extreme-move flags (§9) |
+| Shares outstanding | turnover, and market cap *through time* |
+| Holders / analyst counts | the three heterogeneity splits pre-registered in §6 |
+
+**Earnings dates are the important one.** §8 concedes that attention and
+volatility plausibly share a common driver — news. Earnings announcements are
+the datable, schedulable subset of exactly that, so an announcement-window
+control is the most direct answer available to the objection. Windows widen a
+day either side, because attention and volatility both build ahead of results
+and decay after them.
+
+Keeping *future* scheduled announcements is deliberate and is not look-ahead: a
+results date is published weeks in advance. What would be look-ahead is using
+the announcement's **content**.
+
+### The three-state rule
+
+Yahoo's earnings history is shallow — roughly a decade at best, often much less,
+and shorter for non-US listings. In a panel spanning 2015–2026 with dates known
+only from, say, 2020, a plain boolean mask would record `False` for every day
+before that: the model would read it as *"no company announced results for five
+years"*. That is a **false statement, not a missing value**, and it biases the
+control toward looking useless.
+
+So coverage is tracked separately from the value, and days outside the known
+span are `pd.NA`. A partial control silently treated as complete is worse than
+no control at all.
+
+### Point-in-time caveat
+
+`fast_info` and `info` are snapshots of **today**. Today's market cap is not
+2016's, so splitting a ten-year panel by it uses information from the end of the
+sample at its start. That is defensible only for a slow-moving classification
+(large versus small company) and must be labelled as a snapshot wherever it
+appears. `market_cap_history` builds the honest version for the tickers where a
+share-count history exists; share counts are carried forward but never
+backwards, since filling backwards would invent a count from a later buyback.
+
+---
+
+## 12. Universe change log
 
 A pre-registered universe that changes without a record is not pre-registered.
 Every change made after the file was first written is listed here, with the
@@ -449,7 +502,7 @@ anything.
 
 ---
 
-## 12. Open items
+## 13. Open items
 
 - **[OPEN]** Whether Tier 2 uses point-in-time index membership. Until it does,
   Tier 2 results carry survivorship bias and must be reported with it stated.

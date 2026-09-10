@@ -171,6 +171,7 @@ Everything used here is free and requires no API key.
 | Article identity | MediaWiki Action API | live | — | redirects, page moves, QIDs |
 | Universe | Wikidata SPARQL | live | — | listings, tickers, sitelinks |
 | Market | `yfinance` | daily OHLCV | decades | primary, no key, no quota |
+| Company | `yfinance` | earnings dates, splits, share counts, holders | varies | same source, no key |
 | Market | Twelve Data / Alpha Vantage | daily OHLCV | decades | optional cross-check, free API key |
 | Macro | FRED `fredgraph.csv` | daily / monthly | decades | controls, **no API key** |
 
@@ -231,8 +232,9 @@ src/attention_panel/
   market.py                      bar validation; Garman-Klass, Parkinson, turnover
   macro.py                       FRED controls, aligned with an explicit publication lag
   features.py                    attention transforms; the per-venue availability lag
+  fundamentals.py                earnings dates, corporate actions, share counts
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           95 tests, none of which touch the network
+tests/                           106 tests, none of which touch the network
 ```
 
 Not yet written: the panel assembly, the HAR baseline, and the significance
@@ -303,8 +305,9 @@ attention-panel validate-universe config/universe_luxury.yaml
 # 2b. Optional: which price sources actually cover this universe's exchanges?
 attention-panel check-sources config/universe_luxury.yaml
 
-# 2c. FRED control series. No API key needed.
+# 2c. FRED control series and yfinance company data. No API key needed.
 attention-panel fetch-macro
+attention-panel fetch-fundamentals config/universe_luxury.yaml
 
 # 3. Fetch. Settled history is cached permanently, so only the first run pays.
 attention-panel fetch-attention config/universe_luxury.yaml
