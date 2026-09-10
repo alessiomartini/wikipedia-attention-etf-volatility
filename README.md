@@ -71,7 +71,7 @@ so the `StandardScaler` is fitted on each fold's training slice only. Scaling
 before splitting would leak the test set's mean and variance into training — the
 most common way a walk-forward backtest is quietly invalidated.
 
-The estimator is **Ridge** regression ($\alpha = 1.0$). Out-of-sample **RMSE**
+The estimator is **Ridge** regression ($\alpha = 1.0$). (We didn't use **Lasso** just because this is an experiment. It would be an improvement to implement the combination of the two of them). Out-of-sample **RMSE**
 and **R²** are printed per fold.
 
 ## Repository layout
