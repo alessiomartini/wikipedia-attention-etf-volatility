@@ -23,7 +23,7 @@ in, and validation is walk-forward rather than shuffled.
 
 | Layer | Source | Retrieved by |
 | --- | --- | --- |
-| Market | Daily OHLCV for one ETF ticker | `yfinance` |
+| Market | Daily OHLCV (Open, High, Low, Close, and Volume) for one ETF ticker | `yfinance` |
 | Alternative | Daily pageviews for one English Wikipedia article | Wikimedia REST API, `/metrics/pageviews/per-article/` |
 
 The two series are joined on the date index with an inner join, so only days
