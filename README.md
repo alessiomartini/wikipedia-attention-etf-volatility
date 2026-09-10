@@ -9,7 +9,7 @@ answer it without fooling itself:
 Attention is proxied by **daily Wikipedia pageviews**; volatility is measured on
 **daily ETF price data**. The point of the project is less the answer than the
 discipline used to reach it: a non-stationary target is transformed into a
-stationary one, features are lagged so no information from the future can leak
+stationary one (WHAT DOES IT MEAN?), features are lagged so no information from the future can leak
 in, and validation is walk-forward rather than shuffled.
 
 > **Status: single-file prototype.** Everything runs from one class in
