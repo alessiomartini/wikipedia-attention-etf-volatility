@@ -163,15 +163,24 @@ Everything used here is free and requires no API key.
 | Attention | Wikimedia Pageviews API | daily, per article, per language | 2015-07 → | ~24–48h latency |
 | Article identity | MediaWiki Action API | live | — | redirects, page moves, QIDs |
 | Universe | Wikidata SPARQL | live | — | listings, tickers, sitelinks |
-| Market | `yfinance` | daily OHLCV | decades | primary |
-| Market | Stooq CSV | daily OHLCV | decades | **cross-check**, no API key |
+| Market | `yfinance` | daily OHLCV | decades | the only price source |
 
-**Why two free price sources rather than one paid one.** The failure mode that
-threatens the result is not downtime — it is a silently wrong bar. An unadjusted
-split, a stale close or a zero-volume placeholder raises nothing; it just
-changes the answer. Two independent sources that disagree make that visible,
-which no single source of any price can. Every ticker is fetched from both, and
-the disagreements go into a data-quality table before any model sees them.
+**Why one price source, and what guards it.** The design originally cross-checked
+yfinance against Stooq, on the reasoning that the failure mode which threatens
+the result is not downtime but a silently wrong bar — an unadjusted split, a
+stale close, a zero-volume placeholder — and that two sources disagreeing is the
+only way to see one. Stooq now answers every request with a JavaScript anti-bot
+page, and no keyless alternative covers European and Asian venues.
+
+So the cross-check was replaced by **source-independent structural checks**:
+internal consistency (is the high really the day's maximum?), zero range
+(halts), stale bars (all four prices repeating the previous day), and extreme
+moves (probable unadjusted splits). The first live run vindicated this — with no
+second source they found four to five bad bars per Hong Kong ticker plus single
+bad bars in four European names. Flagged bars are excluded from the estimators,
+not merely counted: a bar whose reported high sits below its close still yields
+a finite `ln(H/L)`, so it produces a plausible but fabricated variance on a day
+that looks entirely ordinary.
 
 **Redirects are summed into the canonical article.** Each redirect title carries
 its own independent pageview counter, and readers arrive via whichever alias a

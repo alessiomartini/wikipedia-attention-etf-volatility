@@ -1,19 +1,25 @@
-"""Market data: two free sources, cross-validated, and range-based volatility.
+"""Market data: daily OHLCV, validated in depth, and range-based volatility.
 
-WHY TWO FREE SOURCES INSTEAD OF ONE PAID ONE
+WHY THERE IS ONLY ONE SOURCE, AND WHAT REPLACED THE SECOND
 
-`yfinance` scrapes an undocumented endpoint; it breaks periodically and its
-behaviour changes between releases. The usual remedy is a paid vendor, but for
-this study two independent *free* sources are strictly better than one paid
-one, because the failure mode that actually threatens the result is not
-downtime -- it is a silently wrong bar. An unadjusted split, a zero-volume
-placeholder or a stale close does not raise anything; it just changes the
-answer. Two sources that disagree make that visible, which a single source of
-any price cannot.
+The original design used Stooq as a free, keyless cross-check against yfinance,
+on the reasoning that the failure mode which threatens the result is not
+downtime but a silently wrong bar -- an unadjusted split, a stale close, a
+zero-volume placeholder -- and that two sources disagreeing is the only way to
+see one. That reasoning still holds. Stooq simply stopped being usable: it now
+answers every request with a JavaScript anti-bot challenge page, which no
+User-Agent or header can get past. Every keyless alternative surveyed either
+lacks European and Asian coverage or has since started requiring an API key.
 
-  * yfinance  -- broad coverage, adjusted OHLC, unstable interface.
-  * Stooq     -- free CSV, no API key, decades of history including European
-                 venues; used as the cross-check, not as a fallback.
+So the cross-check was replaced by source-independent structural checks, and
+the first live run vindicated that: they found four to five corrupt or frozen
+bars per Hong Kong ticker, plus single bad bars in Signet, Watches of
+Switzerland, Puma and Zalando, with no second source involved at all. What a
+cross-check would still add is detection of bars that are internally coherent
+but wrong -- and `stale_bars` covers the commonest member of that class, the
+quote carried forward unchanged from the previous day.
+
+`cross_check` is kept, unused, for whenever a second source becomes available.
 
 THE ADJUSTMENT TRAP
 
@@ -42,26 +48,6 @@ from .httpcache import CachePolicy, HttpClient
 log = logging.getLogger(__name__)
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
-
-#: Yahoo exchange suffix -> Stooq suffix.
-#: UNVERIFIED: written without network access. `cli validate-universe` reports
-#: every symbol that fails to resolve on Stooq, and this table is the first
-#: place to look when it does.
-STOOQ_SUFFIX = {
-    "": ".us",
-    ".PA": ".fr",
-    ".MI": ".it",
-    ".L": ".uk",
-    ".DE": ".de",
-    ".SW": ".ch",
-    ".MC": ".es",
-    ".ST": ".se",
-    ".CO": ".dk",
-    ".AS": ".nl",
-    ".T": ".jp",
-    ".HK": ".hk",
-}
-
 
 # ---------------------------------------------------------------------------
 # Fetching
@@ -99,97 +85,6 @@ def fetch_yfinance(ticker: str, start: dt.date, end: dt.date) -> pd.DataFrame:
     return frame.rename_axis("date").sort_index()
 
 
-def to_stooq_symbol(ticker: str) -> str | None:
-    """Translate a Yahoo ticker into Stooq's convention, or None if unmapped."""
-    base, _, suffix = ticker.partition(".")
-    key = f".{suffix}" if suffix else ""
-    mapped = STOOQ_SUFFIX.get(key)
-    if mapped is None:
-        return None
-    # Stooq lowercases symbols and does not use Yahoo's dash convention
-    # (Yahoo "HM-B.ST" is Stooq "hmb.se").
-    return base.replace("-", "").lower() + mapped
-
-
-@dataclass
-class StooqResult:
-    """A Stooq fetch, with the reason it failed when it did.
-
-    WHY THE REASON IS RETURNED RATHER THAN LOGGED AWAY
-
-    Stooq answers almost everything with HTTP 200: an unknown symbol, a
-    rate-limit refusal and a real CSV all arrive as a successful response with
-    a different body. A caller that only sees an empty frame cannot tell a
-    company that has no Stooq listing from a client that is being throttled --
-    and those need opposite responses. The first live run of the validator hit
-    exactly this: every symbol failed, including plain US tickers, which rules
-    out the exchange-suffix table and points at the request itself. Carrying
-    the body prefix back is what turns that into a diagnosable fact.
-    """
-
-    frame: pd.DataFrame
-    reason: str = ""  # empty when the fetch succeeded
-
-    @property
-    def ok(self) -> bool:
-        return not self.frame.empty
-
-
-#: Stooq is a plain file server with no documented API and no stated agent
-#: policy. It is given a descriptive agent like every other upstream, but as a
-#: SEPARATE value: Wikimedia's requirement is a contact address, which is not
-#: something an unrelated CSV host has asked for, and the two should not have
-#: to change together.
-STOOQ_USER_AGENT = "attention-panel/0.1 (research; contact via repository)"
-
-
-def fetch_stooq(
-    client: HttpClient,
-    ticker: str,
-    start: dt.date,
-    end: dt.date,
-    user_agent: str | None = None,
-) -> StooqResult:
-    """Daily OHLCV from Stooq's free CSV endpoint. No API key required."""
-    symbol = to_stooq_symbol(ticker)
-    if symbol is None:
-        return StooqResult(_empty_ohlcv(), f"no Stooq suffix mapped for {ticker!r}")
-
-    body = client.get_text(
-        "https://stooq.com/q/d/l/",
-        params={"s": symbol, "d1": f"{start:%Y%m%d}", "d2": f"{end:%Y%m%d}", "i": "d"},
-        headers={"User-Agent": user_agent or STOOQ_USER_AGENT},
-        policy=CachePolicy.VOLATILE,
-        allow_404=True,
-    )
-
-    if body is None:
-        return StooqResult(_empty_ohlcv(), f"{symbol}: HTTP 404")
-    if not body.strip():
-        return StooqResult(_empty_ohlcv(), f"{symbol}: empty response body")
-
-    # Not CSV. The body is the only evidence of what went wrong, so a prefix of
-    # it is carried back verbatim rather than discarded.
-    if not body.lstrip().lower().startswith("date"):
-        prefix = " ".join(body.strip().split())[:160]
-        return StooqResult(_empty_ohlcv(), f"{symbol}: not CSV -> {prefix!r}")
-
-    try:
-        frame = pd.read_csv(io.StringIO(body))
-    except (pd.errors.ParserError, ValueError) as exc:
-        return StooqResult(_empty_ohlcv(), f"{symbol}: unparseable CSV ({exc})")
-
-    frame.columns = [c.strip().lower() for c in frame.columns]
-    if "volume" not in frame:
-        frame["volume"] = np.nan
-    missing = [c for c in ("date", "open", "high", "low", "close") if c not in frame.columns]
-    if missing:
-        return StooqResult(_empty_ohlcv(), f"{symbol}: CSV missing columns {missing}")
-
-    frame["date"] = pd.to_datetime(frame["date"])
-    return StooqResult(frame.set_index("date")[OHLCV_COLUMNS].sort_index())
-
-
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -224,9 +119,14 @@ def validate_ohlcv(frame: pd.DataFrame, ticker: str) -> dict[str, object]:
     report["low_above_others"] = int((l > np.minimum(o, c) + tol).sum())
     report["high_below_low"] = int((h < l - tol).sum())
 
-    # How many bars the volatility estimators will actually be able to use.
-    # Reported so the loss is visible rather than inferred from a row count.
-    report["unusable_bars"] = int((~consistent_bars(frame, tol)).sum())
+    # How many bars the volatility estimators will actually be able to use, and
+    # why each was lost. The breakdown matters: four zero-range days in a Hong
+    # Kong small cap are plausible trading halts, whereas four bars with a high
+    # below the close are corruption, and a single aggregate number cannot tell
+    # a reader which of the two they are looking at.
+    stale = stale_bars(frame)
+    report["stale_bars"] = int(stale.sum())
+    report["unusable_bars"] = int((~usable_bars(frame, tol)).sum())
 
     # A zero range means high == low: a halted, suspended or untraded day.
     # These must be excluded from the volatility estimator rather than fed to
@@ -314,6 +214,41 @@ def consistent_bars(frame: pd.DataFrame, tol: float = 1e-6) -> pd.Series:
     )
 
 
+def stale_bars(frame: pd.DataFrame) -> pd.Series:
+    """Bars whose four prices exactly repeat the previous bar's: a frozen quote.
+
+    For a liquid stock, two consecutive sessions printing the identical open,
+    high, low AND close is not a market outcome -- it is the vendor carrying
+    yesterday forward across a data gap or a non-trading day it failed to drop.
+
+    WHY THESE ARE EXCLUDED RATHER THAN COUNTED
+
+    A carried-forward bar is not merely noisy, it is a DUPLICATE. Its variance
+    is a verbatim copy of the previous day's, so leaving it in manufactures
+    autocorrelation in the target -- and the study's baseline (HAR) is built
+    entirely out of the target's own autocorrelation. Fake persistence in the
+    target would inflate the baseline's apparent skill and, worse, could be
+    mistaken for the very predictability the study is trying to measure.
+
+    This is also the commonest member of the one class the removed Stooq
+    cross-check would still have caught: bars that are internally coherent and
+    nonetheless wrong. Only the repeat is marked, never the first occurrence.
+    """
+    prices = frame[["open", "high", "low", "close"]].astype(float)
+    return (prices == prices.shift(1)).all(axis=1).fillna(False)
+
+
+def usable_bars(frame: pd.DataFrame, tol: float = 1e-6) -> pd.Series:
+    """The single gate every volatility estimator passes its input through.
+
+    Structurally consistent AND not a frozen repeat. Having one definition
+    means a bar cannot be rejected by the data-quality report while still
+    reaching the regression, which is the kind of drift that leaves a study
+    quietly measuring something other than what it documents.
+    """
+    return consistent_bars(frame, tol) & ~stale_bars(frame)
+
+
 def garman_klass_variance(frame: pd.DataFrame) -> pd.Series:
     """Daily variance from the full OHLC bar (Garman & Klass, 1980).
 
@@ -335,7 +270,7 @@ def garman_klass_variance(frame: pd.DataFrame) -> pd.Series:
     and `realized_variance` combines the two.
     """
     o, h, l, c = (frame[k].astype(float) for k in ("open", "high", "low", "close"))
-    valid = consistent_bars(frame)
+    valid = usable_bars(frame)
 
     hl = np.log(h.where(valid) / l.where(valid))
     co = np.log(c.where(valid) / o.where(valid))
@@ -356,7 +291,7 @@ def parkinson_variance(frame: pd.DataFrame) -> pd.Series:
     the other is an estimator artefact rather than a finding.
     """
     h, l = frame["high"].astype(float), frame["low"].astype(float)
-    valid = consistent_bars(frame)
+    valid = usable_bars(frame)
     hl = np.log(h.where(valid) / l.where(valid))
     variance = hl**2 / (4.0 * math.log(2.0))
     return variance.where(variance > 0).rename("parkinson_variance")

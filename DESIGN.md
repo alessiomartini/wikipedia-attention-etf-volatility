@@ -265,17 +265,42 @@ All free, no API key anywhere in the pipeline.
 | Attention | Wikimedia Pageviews API | daily per-article, per-language series |
 | Article identity | MediaWiki Action API | canonical titles, redirect graph, page moves, QIDs |
 | Universe | Wikidata SPARQL | listings (P414), tickers (P249), ISIN (P946), sitelinks |
-| Market | `yfinance` | primary daily OHLCV |
-| Market | Stooq CSV | independent cross-check |
+| Market | `yfinance` | daily OHLCV, the only price source |
 
-**Two free price sources rather than one paid one.** `yfinance` scrapes an
-undocumented endpoint and breaks periodically; the usual remedy is a vendor
-subscription. But the failure mode that actually threatens the result is not
-downtime — it is a silently wrong bar. An unadjusted split, a stale close or a
-zero-volume placeholder raises nothing and simply changes the answer. Two
-independent sources that disagree make that visible, which no single source of
-any price can. Stooq is free, needs no API key, and covers European venues with
-decades of history, so the cross-check costs nothing.
+**The two-source design was tried and abandoned.** The reasoning behind it
+stands: the failure mode that threatens the result is not downtime but a
+silently wrong bar — an unadjusted split, a stale close, a zero-volume
+placeholder — and two sources disagreeing is the only way to see one. Stooq
+simply stopped being usable. On 2026-09-10 it answered **every** request,
+including plain US symbols, with a JavaScript anti-bot challenge page
+(`<noscript>This site requires JavaScript to verify…`), which no User-Agent or
+header gets past. Every keyless alternative surveyed either lacks European and
+Asian coverage or now requires an API key.
+
+**What replaced it: source-independent structural checks**, and the first live
+run vindicated the substitution. With no second source involved they found four
+to five bad bars per Hong Kong ticker plus single bad bars in Signet, Watches of
+Switzerland, Puma and Zalando. Four checks, each aimed at a specific way a free
+feed has been observed to be wrong while looking fine:
+
+| Check | Catches |
+| --- | --- |
+| internal consistency (`high ≥ max(O,C)`, `low ≤ min(O,C)`) | corrupt bars whose range is finite but false |
+| zero range (`high == low`) | halts and untraded days, whose log-variance is `-inf` |
+| stale bars (all four prices repeat the previous day) | quotes carried forward across a data gap |
+| extreme moves (\|log return\| > 0.5) | probable unadjusted corporate actions |
+
+The stale-bar check is the important addition, because it covers the commonest
+member of the one class a cross-check would still have caught: bars that are
+internally coherent and nonetheless wrong. A carried-forward bar is a
+*duplicate*, so its variance is a verbatim copy of the previous day's —
+manufacturing autocorrelation in a target whose baseline (§5) is built entirely
+out of the target's own autocorrelation. That is not noise; it would inflate the
+baseline's apparent skill and could be mistaken for the predictability the study
+is trying to measure.
+
+`cross_check()` is retained, unused, for whenever a second source becomes
+available.
 
 **The adjustment trap.** Garman–Klass uses only within-day ratios (H/L, C/O), so
 a corporate-action factor applied to all four prices of a day cancels out. The
@@ -305,7 +330,7 @@ anything.
 | `Levi's 501` **removed** from LEVI brands | Redirects to `Levi Strauss & Co.`, the company's own corporate article: it would have counted one series twice, as corporate and as brand attention. |
 | `Loewe (brand)` **removed** from LVMH brands | Resolves to `Löwe`, a different entity. Pending a verified title. |
 | `SKX` marked `delisted_on: 2025-09-12` | yfinance returns no data; taken private in 2025. Date still to be confirmed. |
-| Six titles left unresolved | `Daniel Lee (fashion designer)`, `La Mer (brand)`, `La Prairie (company)`, `Timberland (brand)`, `Ugg (brand)`, `Watches of Switzerland Group` do not exist. The validator now proposes candidates from the wiki's own search; a human confirms each one rather than guessing. |
+| Six broken titles resolved (see below) | Four were wrong titles, corrected from the wiki's own search: `Daniel Lee (designer)`, `Timberland (company)`, `UGG (brand)` (case matters after the first character), `Watches of Switzerland`. Two have no article at all and were removed: `La Mer (brand)` (search returns Debussy's composition and the parent company) and `La Prairie (company)` (search returns Canadian towns). |
 
 ### What the run changed in the code, not the universe
 
@@ -320,10 +345,13 @@ anything.
   bar, so it yields a plausible but fabricated variance on a day that looks
   ordinary. §9's claim that two sources make silent corruption visible held —
   the structural checks caught these without needing the second source.
-- **Stooq returns a failure reason.** It answers nearly everything with HTTP
-  200, so an empty frame cannot distinguish an unlisted symbol from a throttled
-  client. The cross-check was unavailable for every ticker on the first run,
-  including plain US symbols, which rules out the exchange-suffix table.
+- **Stooq was removed entirely.** Making it report its failure reason was what
+  diagnosed it: the body is a JavaScript challenge page, so the problem was
+  never the exchange-suffix table. See §9 for what replaced it.
+- **Stale-bar detection added**, and unusable bars are now reported broken down
+  by cause. Four zero-range days in a thin Hong Kong name are plausible halts;
+  four bars with a high below the close are corruption. A single aggregate
+  count cannot tell a reader which they are looking at.
 
 ---
 

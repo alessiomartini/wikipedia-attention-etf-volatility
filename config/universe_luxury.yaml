@@ -168,7 +168,7 @@ companies:
     name: Burberry
     articles:
       corporate: Burberry
-      people: [Daniel Lee (fashion designer)]
+      people: [Daniel Lee (designer)]
 
   - ticker: PNDORA.CO
     name: Pandora A/S
@@ -178,7 +178,7 @@ companies:
   - ticker: WOSG.L
     name: Watches of Switzerland
     articles:
-      corporate: Watches of Switzerland Group
+      corporate: Watches of Switzerland
 
   # --- Europe: apparel, sportswear, beauty ---------------------------------
   - ticker: ADS.DE
@@ -235,7 +235,7 @@ companies:
     name: Beiersdorf
     articles:
       corporate: Beiersdorf
-      brands: [Nivea, La Prairie (company)]
+      brands: [Nivea]   # "La Prairie (company)" has no article; search returns Canadian towns
 
   # --- United States -------------------------------------------------------
   - ticker: NKE
@@ -272,7 +272,7 @@ companies:
     name: Estee Lauder
     articles:
       corporate: The Estée Lauder Companies
-      brands: [MAC Cosmetics, Clinique, La Mer (brand)]
+      brands: [MAC Cosmetics, Clinique]   # "La Mer (brand)" has no article on en.wikipedia
 
   - ticker: PVH
     name: PVH Corp
@@ -284,7 +284,7 @@ companies:
     name: VF Corporation
     articles:
       corporate: VF Corporation
-      brands: [The North Face, Vans, Supreme (brand), Timberland (brand)]
+      brands: [The North Face, Vans, Supreme (brand), Timberland (company)]
 
   - ticker: LEVI
     name: Levi Strauss
@@ -299,7 +299,7 @@ companies:
     name: Deckers Outdoor
     articles:
       corporate: Deckers Brands
-      brands: [Ugg (brand), Hoka]
+      brands: [UGG (brand), Hoka]
 
   - ticker: SKX
     name: Skechers

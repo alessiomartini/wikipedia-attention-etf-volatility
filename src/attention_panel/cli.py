@@ -30,14 +30,7 @@ import requests
 
 from .config import load_universe
 from .httpcache import HttpClient, RateLimitError
-from .market import (
-    build_market_features,
-    cross_check,
-    fetch_stooq,
-    fetch_yfinance,
-    to_stooq_symbol,
-    validate_ohlcv,
-)
+from .market import build_market_features, fetch_yfinance, validate_ohlcv
 from .mediawiki import find_title_collisions, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
 
@@ -173,10 +166,10 @@ def cmd_validate_universe(args) -> int:
 
     # -- tickers ------------------------------------------------------------
 
-    print(f"\nChecking {len(universe.companies)} tickers against yfinance and Stooq ...")
+    print(f"\nChecking {len(universe.companies)} tickers on yfinance ...")
     start_date = dt.date.today() - dt.timedelta(days=365)
     end_date = dt.date.today()
-    stooq_reasons: list[str] = []
+    total_unusable = 0
 
     for company in universe.companies:
         try:
@@ -201,30 +194,29 @@ def cmd_validate_universe(args) -> int:
             f"{checks['first_date']}..{checks['last_date']}"
         )
 
-        stooq = fetch_stooq(client, company.ticker, start_date, end_date, args.stooq_user_agent)
-        if stooq.ok:
-            agreement = cross_check(yahoo, stooq.frame)
-            line += f"  stooq ok, mismatches={agreement['mismatches']}"
-            if agreement["mismatches"]:
-                failures.append(f"{company.ticker}: sources disagree")
-        else:
-            line += "  stooq FAILED"
-            stooq_reasons.append(stooq.reason)
-
-        for flag in ("high_below_others", "low_above_others", "extreme_moves", "unusable_bars"):
+        # Print the breakdown, not just the total: four zero-range days in a
+        # thin Hong Kong name are plausible halts, four bars with a high below
+        # the close are corruption, and one aggregate cannot tell them apart.
+        for flag in (
+            "high_below_others",
+            "low_above_others",
+            "zero_range_days",
+            "stale_bars",
+            "extreme_moves",
+            "unusable_bars",
+        ):
             if checks.get(flag):
                 line += f"  {flag}={checks[flag]}"
+        total_unusable += int(checks.get("unusable_bars", 0))
         print(line)
 
-    if stooq_reasons:
-        print(f"\nSTOOQ CROSS-CHECK UNAVAILABLE for {len(stooq_reasons)} tickers.")
-        print("Stooq answers nearly everything with HTTP 200, so the body is the only")
-        print("evidence of what went wrong. Distinct responses seen:\n")
-        for reason in sorted({_strip_symbol(r) for r in stooq_reasons})[:5]:
-            print(f"  {reason}")
-        print("\nThis degrades the cross-check but does not block anything: yfinance is")
-        print("the primary source and the structural checks above still run. Try a")
-        print("different agent with --stooq-user-agent if the body suggests one.")
+    if total_unusable:
+        print(f"\n{total_unusable} bars across the universe are unusable and will be")
+        print("dropped by the volatility estimators. Flagged bars are NOT a reason to")
+        print("drop a ticker on their own -- a handful out of ~250 days is normal. A")
+        print("ticker whose count runs into the dozens is a different matter, and the")
+        print("breakdown above says whether it is halts (zero_range_days), frozen")
+        print("quotes (stale_bars) or corruption (high_below_others).")
 
     print("\n" + "=" * 70)
     if failures:
@@ -246,12 +238,6 @@ def _title_owners(universe) -> dict[str, list[str]]:
         for article in company.articles:
             owners.setdefault(article.title, []).append(f"{company.ticker}/{article.family.value}")
     return owners
-
-
-def _strip_symbol(reason: str) -> str:
-    """Drop the leading `symbol: ` so identical failures collapse into one line."""
-    _, sep, rest = reason.partition(": ")
-    return rest if sep else reason
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +311,9 @@ def cmd_fetch_attention(args) -> int:
 
 
 def cmd_fetch_market(args) -> int:
+    # No Wikimedia endpoint is involved here, so this command deliberately does
+    # not build an HttpClient and does not require a User-Agent to be set.
     universe = load_universe(args.universe)
-    client = make_client(args)
     start, end = _date_range(args)
     out_dir = Path(args.out) / "market"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -345,11 +332,7 @@ def cmd_fetch_market(args) -> int:
             continue
 
         checks = validate_ohlcv(yahoo, company.ticker)
-        stooq = fetch_stooq(client, company.ticker, start, end, args.stooq_user_agent)
-        checks["stooq_reason"] = stooq.reason
-        checks.update({f"xcheck_{k}": v for k, v in cross_check(yahoo, stooq.frame).items()})
         checks.pop("extreme_move_dates", None)
-        checks.pop("xcheck_mismatch_dates", None)
         quality.append(checks)
 
         features = build_market_features(yahoo)
@@ -372,12 +355,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="attention_panel", description=__doc__)
     parser.add_argument("--user-agent", default=None, help=f"overrides ${UA_ENV_VAR}")
     parser.add_argument("--cache-dir", default=".httpcache")
-    parser.add_argument(
-        "--stooq-user-agent",
-        default=None,
-        help="agent to send to Stooq only; Wikimedia's contact requirement does not "
-             "apply to an unrelated CSV host, so the two are set separately",
-    )
     parser.add_argument("--out", default=str(DATA_DIR))
     parser.add_argument("--start", default=None, help="YYYY-MM-DD (default: 2015-07-01)")
     parser.add_argument("--end", default=None, help="YYYY-MM-DD (default: today)")
@@ -430,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         # and both have the same remedy: wait, then re-run against the cache.
         print(f"\nnetwork failure talking to an upstream API:\n  {exc}", file=sys.stderr)
         print(
-            "\nCheck connectivity to wikimedia.org, query.wikidata.org and stooq.com. "
+            "\nCheck connectivity to wikimedia.org and query.wikidata.org. "
             "Cached progress is kept, so re-running resumes rather than restarts.",
             file=sys.stderr,
         )

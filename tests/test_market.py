@@ -150,54 +150,50 @@ def test_cross_check_reports_disagreement_without_picking_a_winner():
     assert result["mismatch_dates"] == ["2024-01-04"]
 
 
-@pytest.mark.parametrize(
-    "yahoo, stooq",
-    [("NKE", "nke.us"), ("MC.PA", "mc.fr"), ("HM-B.ST", "hmb.se"), ("1913.HK", "1913.hk")],
-)
-def test_stooq_symbol_translation(yahoo, stooq):
-    assert market.to_stooq_symbol(yahoo) == stooq
+def test_stale_bars_flag_only_the_repeat_not_the_original():
+    """A quote carried forward is a duplicate, not a quiet day.
+
+    Its variance is a verbatim copy of the previous day's, so leaving it in
+    manufactures autocorrelation in the target -- and the study's baseline is
+    built entirely out of the target's own autocorrelation.
+    """
+    row = [100.0, 110.0, 90.0, 105.0]
+    moved = [101.0, 111.0, 91.0, 106.0]
+    frame = pd.DataFrame(
+        [row, row, moved],
+        columns=["open", "high", "low", "close"],
+        index=pd.date_range("2024-01-02", periods=3, freq="B", name="date"),
+    )
+    frame["volume"] = 1e6
+
+    assert list(market.stale_bars(frame)) == [False, True, False]
+    assert list(market.usable_bars(frame)) == [True, False, True]
+    assert np.isnan(market.garman_klass_variance(frame).iloc[1])
+    assert market.validate_ohlcv(frame, "TEST")["stale_bars"] == 1
 
 
-def test_unmapped_exchange_returns_none_rather_than_guessing():
-    """A wrong Stooq symbol would silently cross-check against another company."""
-    assert market.to_stooq_symbol("ABC.XYZ") is None
+def test_a_bar_that_merely_repeats_the_close_is_not_stale():
+    """Only an exact repeat of all four prices is a frozen quote.
 
-
-def test_an_internally_inconsistent_bar_is_excluded_from_the_estimators():
-    """The failure mode found in live vendor data: a high below the close.
-
-    `ln(H/L)` stays finite on such a bar, so it produces a plausible but
-    fabricated variance on a day the study would otherwise treat as ordinary.
-    It has to be excluded from the numbers, not merely counted in a report.
+    Two days closing at the same price after different intraday paths is an
+    ordinary market outcome, and discarding it would throw away real data.
     """
     frame = pd.DataFrame(
         {
-            "open": [100.0, 100.0],
-            "high": [110.0, 101.0],   # second bar: high sits below the close
+            "open": [100.0, 102.0],
+            "high": [110.0, 108.0],
             "low": [90.0, 95.0],
             "close": [105.0, 105.0],
             "volume": [1e6, 1e6],
         },
         index=pd.date_range("2024-01-02", periods=2, freq="B", name="date"),
     )
-
-    assert list(market.consistent_bars(frame)) == [True, False]
-    assert np.isnan(market.garman_klass_variance(frame).iloc[1])
-    assert np.isnan(market.parkinson_variance(frame).iloc[1])
-    assert np.isnan(market.realized_variance(frame).iloc[1])
-
-    report = market.validate_ohlcv(frame, "TEST")
-    assert report["high_below_others"] == 1
-    assert report["unusable_bars"] == 1
+    assert list(market.stale_bars(frame)) == [False, False]
 
 
-def test_a_low_above_the_open_is_also_excluded():
-    frame = pd.DataFrame(
-        {
-            "open": [100.0], "high": [110.0], "low": [102.0],  # low above the open
-            "close": [105.0], "volume": [1e6],
-        },
-        index=pd.DatetimeIndex(pd.to_datetime(["2024-01-02"]), name="date"),
-    )
-    assert not market.consistent_bars(frame).iloc[0]
-    assert np.isnan(market.garman_klass_variance(frame).iloc[0])
+def test_validate_ohlcv_separates_halts_from_corruption(ohlcv):
+    """A single unusable_bars total cannot say which problem a ticker has."""
+    report = market.validate_ohlcv(ohlcv, "TEST")
+    assert report["zero_range_days"] == 1   # the halted 2024-01-04 bar
+    assert report["stale_bars"] == 0
+    assert report["unusable_bars"] >= 1
