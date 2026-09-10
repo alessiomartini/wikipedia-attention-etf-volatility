@@ -1,89 +1,51 @@
-"""Market data: daily OHLCV, validated in depth, and range-based volatility.
+"""Validation and volatility estimators for daily OHLCV.
 
-WHY THERE IS ONLY ONE SOURCE, AND WHAT REPLACED THE SECOND
+Fetching lives in `sources.py`, which holds every vendor adapter behind one
+interface. This module is about what happens to a price frame once it arrives:
+deciding whether each bar can be believed, and turning the ones that can into
+variance.
 
-The original design used Stooq as a free, keyless cross-check against yfinance,
-on the reasoning that the failure mode which threatens the result is not
-downtime but a silently wrong bar -- an unadjusted split, a stale close, a
-zero-volume placeholder -- and that two sources disagreeing is the only way to
-see one. That reasoning still holds. Stooq simply stopped being usable: it now
-answers every request with a JavaScript anti-bot challenge page, which no
-User-Agent or header can get past. Every keyless alternative surveyed either
-lacks European and Asian coverage or has since started requiring an API key.
+WHY THE CHECKS HERE CARRY SO MUCH WEIGHT
 
-So the cross-check was replaced by source-independent structural checks, and
-the first live run vindicated that: they found four to five corrupt or frozen
-bars per Hong Kong ticker, plus single bad bars in Signet, Watches of
-Switzerland, Puma and Zalando, with no second source involved at all. What a
-cross-check would still add is detection of bars that are internally coherent
-but wrong -- and `stale_bars` covers the commonest member of that class, the
-quote carried forward unchanged from the previous day.
+The design called for two independent price sources, because what threatens the
+result is a silently wrong bar rather than downtime, and two sources
+disagreeing is the only way to see one. That cross-check is currently
+unavailable -- Stooq put a JavaScript anti-bot wall in front of every request,
+and whether any free API tier covers this universe's European and Asian venues
+is an open question `attention-panel check-sources` answers empirically.
 
-`cross_check` is kept, unused, for whenever a second source becomes available.
+So for now the structural checks are the whole defence, and the first live run
+showed they carry it: with no second source they found four to five bad bars per
+Hong Kong ticker plus single bad bars in Signet, Watches of Switzerland, Puma
+and Zalando. Four checks, each aimed at a way a free feed has been seen to be
+wrong while looking fine -- internal consistency, zero range, stale bars,
+extreme moves -- and every one of them EXCLUDES the bar rather than merely
+counting it. A bar whose reported high sits below its close still yields a
+finite ln(H/L), so counting it and using it anyway would put a plausible
+fabricated variance in the target column on a day that looks ordinary.
 
 THE ADJUSTMENT TRAP
 
-The Garman-Klass estimator uses only within-day ratios, H/L and C/O, so a
-corporate-action factor applied to all four prices of a day cancels out. The
-danger is a bar where the four prices are adjusted INCONSISTENTLY: with
+Garman-Klass uses only within-day ratios, H/L and C/O, so a corporate-action
+factor applied to all four prices of a day cancels out -- a property asserted by
+a test rather than trusted. The danger is a bar adjusted INCONSISTENTLY: with
 `auto_adjust=False`, Yahoo returns raw O/H/L/C alongside a separately adjusted
-close, and any code that mixes the raw high with the adjusted close produces a
-meaningless range on every split day. This module therefore always requests
-consistently adjusted OHLC and never mixes the two conventions.
+close, and mixing the raw high with the adjusted close gives a meaningless range
+on every split day. `sources.YahooSource` always requests consistently adjusted
+OHLC for this reason.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-import io
 import logging
 import math
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-from .httpcache import CachePolicy, HttpClient
-
 log = logging.getLogger(__name__)
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
-
-# ---------------------------------------------------------------------------
-# Fetching
-# ---------------------------------------------------------------------------
-
-
-def fetch_yfinance(ticker: str, start: dt.date, end: dt.date) -> pd.DataFrame:
-    """Daily OHLCV from Yahoo, consistently adjusted.
-
-    `auto_adjust=True` is not a default to be inherited but a deliberate
-    choice: it returns O, H, L and C all divided by the same split/dividend
-    factor, which is the only form in which the range estimators below are
-    meaningful. See the module docstring.
-    """
-    import yfinance  # imported lazily: the rest of the package must stay usable
-                     # when yfinance is broken, which it periodically is.
-
-    raw = yfinance.download(
-        ticker,
-        start=start.isoformat(),
-        end=(end + dt.timedelta(days=1)).isoformat(),  # yfinance `end` is exclusive
-        auto_adjust=True,
-        progress=False,
-        actions=False,
-    )
-    if raw is None or raw.empty:
-        return _empty_ohlcv()
-
-    # Recent yfinance returns a MultiIndex column even for a single ticker.
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-
-    frame = raw.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
-    frame.index = pd.to_datetime(frame.index).tz_localize(None).normalize()
-    return frame.rename_axis("date").sort_index()
-
 
 # ---------------------------------------------------------------------------
 # Validation

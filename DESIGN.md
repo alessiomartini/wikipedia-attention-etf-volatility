@@ -299,8 +299,19 @@ out of the target's own autocorrelation. That is not noise; it would inflate the
 baseline's apparent skill and could be mistaken for the predictability the study
 is trying to measure.
 
-`cross_check()` is retained, unused, for whenever a second source becomes
-available.
+**Restoring the cross-check is now an empirical question, not a choice.** Every
+candidate free API is an adapter behind one interface in `sources.py`, and
+`attention-panel check-sources` probes each with one representative ticker per
+exchange. Coverage gaps in free tiers are per-venue, not per-company, so eleven
+probes answer what 48 would. Twelve Data is addressed by ISO 10383 MIC code
+(XPAR, XMIL, XETR …) rather than a vendor suffix convention, which is the less
+guess-laden mapping; Alpha Vantage's free tier is capped at roughly 25 calls a
+day, which rules it out as a primary but not as an occasional cross-check.
+
+A source with partial coverage is still worth keeping, provided the
+data-quality table records **which** tickers were cross-checked and which were
+not. An unchecked ticker reported as a checked one is a worse failure than no
+cross-check at all.
 
 **The adjustment trap.** Garman–Klass uses only within-day ratios (H/L, C/O), so
 a corporate-action factor applied to all four prices of a day cancels out. The

@@ -30,7 +30,8 @@ import requests
 
 from .config import load_universe
 from .httpcache import HttpClient, RateLimitError
-from .market import build_market_features, fetch_yfinance, validate_ohlcv
+from .market import build_market_features, cross_check, validate_ohlcv
+from .sources import YahooSource, available_cross_checks, exchange_of
 from .mediawiki import find_title_collisions, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
 
@@ -123,6 +124,8 @@ def cmd_validate_universe(args) -> int:
     universe = load_universe(args.universe)
     client = make_client(args)
     failures: list[str] = []
+    primary = YahooSource()
+    cross_checks = available_cross_checks()
 
     # -- articles -----------------------------------------------------------
 
@@ -166,17 +169,20 @@ def cmd_validate_universe(args) -> int:
 
     # -- tickers ------------------------------------------------------------
 
-    print(f"\nChecking {len(universe.companies)} tickers on yfinance ...")
+    names = ", ".join([primary.name, *(s.name for s in cross_checks)])
+    print(f"\nChecking {len(universe.companies)} tickers on {names} ...")
+    if not cross_checks:
+        print("  (no cross-check source configured -- run `check-sources` to see the options)")
     start_date = dt.date.today() - dt.timedelta(days=365)
     end_date = dt.date.today()
     total_unusable = 0
 
     for company in universe.companies:
-        try:
-            yahoo = fetch_yfinance(company.ticker, start_date, end_date)
-        except Exception as exc:  # yfinance raises a different type every release
-            print(f"  {company.ticker:12s} yfinance ERROR: {exc}")
-            failures.append(f"{company.ticker}: yfinance error")
+        fetched = primary.fetch(company.ticker, start_date, end_date)
+        yahoo = fetched.frame
+        if yahoo.empty and fetched.reason and "no rows" not in fetched.reason:
+            print(f"  {company.ticker:12s} {primary.name} ERROR: {fetched.reason}")
+            failures.append(f"{company.ticker}: {primary.name} error")
             continue
 
         if yahoo.empty:
@@ -207,6 +213,19 @@ def cmd_validate_universe(args) -> int:
         ):
             if checks.get(flag):
                 line += f"  {flag}={checks[flag]}"
+        # Cross-check against whichever second sources are configured. A
+        # ticker no source could confirm is reported as unchecked, never as
+        # checked-and-clean: those are different claims.
+        for source in cross_checks:
+            other = source.fetch(company.ticker, start_date, end_date)
+            if not other.ok:
+                line += f"  {source.name}: {_truncate(other.reason, 28)}"
+                continue
+            agreement = cross_check(yahoo, other.frame)
+            line += f"  {source.name}: {agreement['mismatches']} mismatches"
+            if agreement["mismatches"]:
+                failures.append(f"{company.ticker}: {source.name} disagrees on close")
+
         total_unusable += int(checks.get("unusable_bars", 0))
         print(line)
 
@@ -238,6 +257,85 @@ def _title_owners(universe) -> dict[str, list[str]]:
         for article in company.articles:
             owners.setdefault(article.title, []).append(f"{company.ticker}/{article.family.value}")
     return owners
+
+
+# ---------------------------------------------------------------------------
+# check-sources
+# ---------------------------------------------------------------------------
+
+
+def cmd_check_sources(args) -> int:
+    """Probe every configured price source with one real ticker per exchange.
+
+    This exists because "free" and "covers Borsa Italiana on the free plan" are
+    different claims, and only the second one matters for this universe. Vendor
+    coverage pages are not specific enough about the tier that costs nothing, so
+    the question is settled empirically, from the machine that holds the keys,
+    in about a minute.
+
+    One ticker per exchange rather than all 48: free-tier coverage gaps are
+    per-venue, not per-company, so the extra 37 probes would repeat the same
+    answer while burning a daily credit budget that is often only 25 calls.
+    """
+    universe = load_universe(args.universe)
+    sources = [YahooSource(), *available_cross_checks()]
+
+    configured = [s.name for s in sources]
+    print(f"Sources configured: {', '.join(configured)}")
+    if len(sources) == 1:
+        print(
+            "\nNo cross-check source has a key set, so only the primary source will be\n"
+            "probed. To add one, set TWELVEDATA_API_KEY or ALPHAVANTAGE_API_KEY.\n"
+            "Both have free tiers; whether either covers this universe's exchanges on\n"
+            "that tier is exactly what this command is here to find out."
+        )
+
+    # One representative ticker per venue, first occurrence in the universe.
+    representatives: dict[str, str] = {}
+    for company in universe.companies:
+        if company.delisted_on is None:
+            representatives.setdefault(exchange_of(company.ticker), company.ticker)
+
+    # A short window keeps each probe cheap; coverage is per-exchange and does
+    # not depend on how far back the request reaches.
+    end = dt.date.today()
+    start = end - dt.timedelta(days=120)
+
+    print(f"\nProbing {len(representatives)} exchanges over {start}..{end}\n")
+    header = f"{'exchange':10s} {'ticker':12s}" + "".join(f"{s.name:<34s}" for s in sources)
+    print(header)
+    print("-" * len(header))
+
+    coverage: dict[str, list[str]] = {s.name: [] for s in sources}
+    for exchange, ticker in sorted(representatives.items()):
+        cells = []
+        for source in sources:
+            result = source.fetch(ticker, start, end)
+            if result.ok:
+                cells.append(f"OK {len(result.frame)} rows")
+                coverage[source.name].append(exchange)
+            else:
+                cells.append(_truncate(result.reason, 32))
+        print(f"{exchange:10s} {ticker:12s}" + "".join(f"{c:<34s}" for c in cells))
+
+    print("\n" + "=" * 70)
+    for source in sources:
+        covered = coverage[source.name]
+        print(f"{source.name:14s} covers {len(covered)}/{len(representatives)} exchanges: "
+              f"{', '.join(covered) if covered else 'none'}")
+
+    print(
+        "\nA source covering every exchange can be used as the cross-check. One with\n"
+        "partial coverage is still worth keeping: a bar checked against a second\n"
+        "source on some venues beats none checked anywhere, as long as the\n"
+        "data-quality table records WHICH tickers were cross-checked and which were\n"
+        "not -- an unchecked ticker must never be reported as a checked one."
+    )
+    return 0
+
+
+def _truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "\u2026"
 
 
 # ---------------------------------------------------------------------------
@@ -314,24 +412,31 @@ def cmd_fetch_market(args) -> int:
     # No Wikimedia endpoint is involved here, so this command deliberately does
     # not build an HttpClient and does not require a User-Agent to be set.
     universe = load_universe(args.universe)
+    primary = YahooSource()
+    cross_checks = available_cross_checks()
     start, end = _date_range(args)
     out_dir = Path(args.out) / "market"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     quality: list[dict] = []
     for company in universe.companies:
-        try:
-            yahoo = fetch_yfinance(company.ticker, start, end)
-        except Exception as exc:
-            log.warning("%s: yfinance failed: %s", company.ticker, exc)
-            quality.append({"ticker": company.ticker, "error": str(exc)})
-            continue
-
+        fetched = primary.fetch(company.ticker, start, end)
+        yahoo = fetched.frame
         if yahoo.empty:
-            quality.append({"ticker": company.ticker, "error": "no data"})
+            quality.append({"ticker": company.ticker, "error": fetched.reason or "no data"})
             continue
 
         checks = validate_ohlcv(yahoo, company.ticker)
+        # Record which source confirmed each ticker, so a later reader can tell
+        # a cross-checked series from an unchecked one.
+        checks["cross_checked_by"] = ""
+        for source in cross_checks:
+            other = source.fetch(company.ticker, start, end)
+            if other.ok:
+                agreement = cross_check(yahoo, other.frame)
+                checks["cross_checked_by"] = source.name
+                checks["xcheck_mismatches"] = agreement["mismatches"]
+                break
         checks.pop("extreme_move_dates", None)
         quality.append(checks)
 
@@ -366,6 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("validate-universe", cmd_validate_universe, "check every title and ticker resolves"),
         ("fetch-attention", cmd_fetch_attention, "download the multilingual pageview series"),
         ("fetch-market", cmd_fetch_market, "download and cross-check daily OHLCV"),
+        ("check-sources", cmd_check_sources, "probe each price source, one ticker per exchange"),
     ):
         sub_parser = sub.add_parser(name, help=help_text)
         sub_parser.add_argument("universe", help="path to a universe YAML file")

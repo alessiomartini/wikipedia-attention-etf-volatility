@@ -163,24 +163,42 @@ Everything used here is free and requires no API key.
 | Attention | Wikimedia Pageviews API | daily, per article, per language | 2015-07 → | ~24–48h latency |
 | Article identity | MediaWiki Action API | live | — | redirects, page moves, QIDs |
 | Universe | Wikidata SPARQL | live | — | listings, tickers, sitelinks |
-| Market | `yfinance` | daily OHLCV | decades | the only price source |
+| Market | `yfinance` | daily OHLCV | decades | primary, no key, no quota |
+| Market | Twelve Data / Alpha Vantage | daily OHLCV | decades | optional cross-check, free API key |
 
-**Why one price source, and what guards it.** The design originally cross-checked
-yfinance against Stooq, on the reasoning that the failure mode which threatens
-the result is not downtime but a silently wrong bar — an unadjusted split, a
-stale close, a zero-volume placeholder — and that two sources disagreeing is the
-only way to see one. Stooq now answers every request with a JavaScript anti-bot
-page, and no keyless alternative covers European and Asian venues.
+**Why the price data is cross-checked at all.** The failure mode that threatens
+the result is not downtime — it is a silently wrong bar. An unadjusted split, a
+stale close or a zero-volume placeholder raises nothing; it just changes the
+answer. Two independent sources disagreeing is the only way to see one.
 
-So the cross-check was replaced by **source-independent structural checks**:
+Stooq filled that role until it put a JavaScript anti-bot wall in front of every
+request. The free API tiers that could replace it all publish coverage claims
+that are hard to pin down *for the tier that costs nothing*, and this universe is
+two-thirds non-US — Euronext Paris, Borsa Italiana, LSE, XETRA, SIX, BME, Nasdaq
+Stockholm and Copenhagen, Tokyo, Hong Kong. "Free" and "covers Borsa Italiana on
+the free plan" are different claims, and only the second one matters here.
+
+So each candidate is an adapter behind one interface, and the question is
+settled empirically rather than from a vendor's marketing page:
+
+```bash
+attention-panel check-sources config/universe_luxury.yaml
+```
+
+It probes one representative ticker per exchange — coverage gaps are per-venue,
+not per-company — and prints which source actually returned data for which
+venue. Set `TWELVEDATA_API_KEY` or `ALPHAVANTAGE_API_KEY` to include a source;
+with neither set, everything still runs on the primary source alone.
+
+**Source-independent structural checks do the real work either way**, and the
+first live run proved it: with no second source they found four to five bad bars
+per Hong Kong ticker plus single bad bars in four European names. Four checks —
 internal consistency (is the high really the day's maximum?), zero range
-(halts), stale bars (all four prices repeating the previous day), and extreme
-moves (probable unadjusted splits). The first live run vindicated this — with no
-second source they found four to five bad bars per Hong Kong ticker plus single
-bad bars in four European names. Flagged bars are excluded from the estimators,
-not merely counted: a bar whose reported high sits below its close still yields
-a finite `ln(H/L)`, so it produces a plausible but fabricated variance on a day
-that looks entirely ordinary.
+(halts), stale bars (all four prices repeating the previous day), extreme moves
+(probable unadjusted splits) — and each one **excludes** the bar rather than
+merely counting it. A bar whose reported high sits below its close still yields
+a finite `ln(H/L)`, so counting it and using it anyway would put a plausible,
+fabricated variance in the target column on a day that looks entirely ordinary.
 
 **Redirects are summed into the canonical article.** Each redirect title carries
 its own independent pageview counter, and readers arrive via whichever alias a
@@ -201,9 +219,10 @@ src/attention_panel/
   wikidata.py                    objective universe construction, cross-language sitelinks
   mediawiki.py                   canonical titles, redirect graph, page moves, QIDs
   pageviews.py                   the attention series, redirects summed, zero days filled
-  market.py                      two sources cross-checked; Garman-Klass, Parkinson, turnover
+  sources.py                     every price vendor behind one interface, probed not assumed
+  market.py                      bar validation; Garman-Klass, Parkinson, turnover
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           49 tests, none of which touch the network
+tests/                           67 tests, none of which touch the network
 ```
 
 Not yet written: the panel builder, the attention transforms, the HAR baseline,
@@ -270,6 +289,9 @@ attention-panel plan config/universe_luxury.yaml
 # 2. RUN THIS FIRST. The shipped universe was written without network access,
 #    so its tickers and article titles are unverified by construction.
 attention-panel validate-universe config/universe_luxury.yaml
+
+# 2b. Optional: which price sources actually cover this universe's exchanges?
+attention-panel check-sources config/universe_luxury.yaml
 
 # 3. Fetch. Settled history is cached permanently, so only the first run pays.
 attention-panel fetch-attention config/universe_luxury.yaml
