@@ -8,6 +8,29 @@ version = "0.1.0"
 description = "Does Wikipedia attention carry information about next-day trading activity and realized volatility?"
 requires-python = ">=3.10"
 
+# Only what the ingestion stage needs. The modelling libraries are a separate
+# extra on purpose: on a freshly released Python, scikit-learn and statsmodels
+# are usually the last packages to ship wheels, and a single missing wheel
+# would otherwise fail the whole install and block a stage that does not even
+# use them yet.
+dependencies = [
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+model = ["scikit-learn>=1.3", "statsmodels>=0.14", "scipy>=1.11"]
+dev = ["pytest>=7.4"]
+
+# Installing the project puts this on PATH, so the tool can be run as
+# `attention-panel <command>` from any directory, with no PYTHONPATH and no
+# need to be sitting in the repository root.
+[project.scripts]
+attention-panel = "attention_panel.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

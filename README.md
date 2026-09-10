@@ -204,27 +204,74 @@ and the significance machinery. They are specified in DESIGN.md sections 3–6.
 
 ## Running it
 
+### Setup
+
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/alessiomartini/wikipedia-attention-etf-volatility.git
+cd wikipedia-attention-etf-volatility
+git checkout claude/attention-stock-correlation-b8nrjv
 
-# Wikimedia requires a descriptive User-Agent with a contact address.
-# Anonymous clients are throttled, and the symptom is not an error -- it is a
-# run that quietly returns fewer series than it asked for.
+python -m venv .venv
+# bash / zsh:   source .venv/bin/activate
+# PowerShell:   .venv\Scripts\Activate.ps1
+# Windows CMD:  .venv\Scripts\activate.bat
+
+pip install -e ".[dev]"
+```
+
+`pip install -e .` is the step that makes everything below work: it puts the
+package on the import path, so `python -m attention_panel.cli` runs from any
+directory, and installs an `attention-panel` command as well. Without it,
+Python cannot find the package, because the source lives under `src/`.
+
+The modelling libraries are a separate extra, `pip install -e ".[model]"`. They
+are not needed yet, and on a freshly released Python they are usually the last
+packages to ship wheels — keeping them out of the default install means one
+missing wheel cannot block a stage that does not use them.
+
+### The User-Agent
+
+Wikimedia requires a descriptive User-Agent with a contact address. Anonymous
+clients are throttled, and the symptom is not an error — it is a run that
+quietly returns fewer series than it asked for. Set it once per shell:
+
+```bash
+# bash / zsh (Linux, macOS, Git Bash, WSL)
 export ATTENTION_PANEL_UA="attention-panel/0.1 (https://github.com/<you>/<repo>; <you>@example.com)"
+```
 
+```powershell
+# PowerShell
+$env:ATTENTION_PANEL_UA = "attention-panel/0.1 (https://github.com/<you>/<repo>; <you>@example.com)"
+```
+
+```bat
+:: Windows CMD -- no quotes, and no spaces around the '='
+set ATTENTION_PANEL_UA=attention-panel/0.1 (https://github.com/<you>/<repo>; <you>@example.com)
+```
+
+Or skip the variable and pass `--user-agent "..."` on each command.
+
+### The commands
+
+```bash
 # 1. What would a full fetch cost? Offline, issues no requests.
-python -m attention_panel.cli plan config/universe_luxury.yaml
+attention-panel plan config/universe_luxury.yaml
 
 # 2. RUN THIS FIRST. The shipped universe was written without network access,
 #    so its tickers and article titles are unverified by construction.
-python -m attention_panel.cli validate-universe config/universe_luxury.yaml
+attention-panel validate-universe config/universe_luxury.yaml
 
 # 3. Fetch. Settled history is cached permanently, so only the first run pays.
-python -m attention_panel.cli fetch-attention config/universe_luxury.yaml
-python -m attention_panel.cli fetch-market    config/universe_luxury.yaml
+attention-panel fetch-attention config/universe_luxury.yaml
+attention-panel fetch-market    config/universe_luxury.yaml
 
 pytest
 ```
+
+`python -m attention_panel.cli <command>` is equivalent to `attention-panel
+<command>` everywhere. Paths are relative to the current directory, so run
+these from the repository root.
 
 The pilot is 155 distinct articles × 8 languages = 1,240 series, and redirects
 multiply the request count by roughly 5–15×. That is a large but courteous

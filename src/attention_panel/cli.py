@@ -47,16 +47,42 @@ DATA_DIR = Path("data")
 UA_ENV_VAR = "ATTENTION_PANEL_UA"
 
 
+EXAMPLE_UA = "attention-panel/0.1 (https://github.com/<you>/<repo>; <you>@example.com)"
+
+
+def _user_agent_help() -> str:
+    """Show how to set the variable in the shell the user is actually in.
+
+    `export` is bash syntax and fails on Windows, where the two native shells
+    disagree with each other as well. Printing all three costs three lines and
+    removes a guaranteed stumble on the very first command anyone runs.
+    """
+    return (
+        f"A descriptive User-Agent with a contact address is required by Wikimedia.\n"
+        f"Anonymous clients get throttled, and the symptom is not an error -- it is a run\n"
+        f"that quietly returns fewer series than it asked for.\n\n"
+        f"Set it for your shell:\n\n"
+        f"  bash / zsh (Linux, macOS, Git Bash, WSL)\n"
+        f'    export {UA_ENV_VAR}="{EXAMPLE_UA}"\n\n'
+        f"  PowerShell\n"
+        f'    $env:{UA_ENV_VAR} = "{EXAMPLE_UA}"\n\n'
+        f"  Windows CMD  (no quotes, and no spaces around the '=')\n"
+        f"    set {UA_ENV_VAR}={EXAMPLE_UA}\n\n"
+        f"Or skip the variable entirely and pass it per command:\n"
+        f'    attention-panel --user-agent "{EXAMPLE_UA}" plan config/universe_luxury.yaml'
+    )
+
+
 def make_client(args) -> HttpClient:
     user_agent = args.user_agent or os.environ.get(UA_ENV_VAR)
     if not user_agent:
-        sys.exit(
-            f"A descriptive User-Agent is required by Wikimedia. Set ${UA_ENV_VAR} or pass "
-            f"--user-agent, e.g.\n"
-            f'  export {UA_ENV_VAR}="attention-panel/0.1 '
-            f'(https://github.com/<you>/<repo>; <you>@example.com)"'
-        )
-    return HttpClient(user_agent, cache_dir=args.cache_dir)
+        sys.exit("\n" + _user_agent_help())
+    try:
+        return HttpClient(user_agent, cache_dir=args.cache_dir)
+    except ValueError as exc:
+        # The agent was set but is not usable -- generic, too short, or with no
+        # way to contact its operator.
+        sys.exit(f"\n{exc}\n\n{_user_agent_help()}")
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +333,20 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
+    universe_path = Path(getattr(args, "universe", ""))
+    if not universe_path.exists():
+        print(f"universe file not found: {universe_path}", file=sys.stderr)
+        print(
+            "\nPaths are relative to the current directory, so this usually means the shell "
+            "is not\nin the repository. Change into your clone first:\n"
+            "\n    cd wikipedia-attention-etf-volatility\n"
+            f"\nThen re-run. Available universe files:",
+            file=sys.stderr,
+        )
+        for candidate in sorted(Path("config").glob("*.yaml")) or ["  (none found here either)"]:
+            print(f"    {candidate}", file=sys.stderr)
+        return 2
+
     try:
         return args.handler(args)
     except KeyboardInterrupt:
