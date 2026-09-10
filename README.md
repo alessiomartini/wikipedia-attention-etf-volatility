@@ -51,7 +51,7 @@ lag_vol_1,   lag_vol_2      realized volatility at t-1 and t-2
 ```
 
 Using today's attention to predict today's volatility would be a look-ahead bug
-dressed up as a result. Only $t-1$ and $t-2$ are available to the model.
+dressed up as a result. Only $t-1$ and $t-2$ are available to the model. In principle, what we want to do is to use today's data to predict tomorrow's volatility (implied volatility) and compare it with realized volatility of tomorrow using tomorrow's data.
 
 ### 4. Walk-forward validation
 
