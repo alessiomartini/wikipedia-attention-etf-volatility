@@ -69,7 +69,13 @@ companies:
     name: LVMH
     articles:
       corporate: LVMH
-      brands: [Louis Vuitton, Christian Dior (fashion house), Moët & Chandon, Bulgari, Tiffany & Co., Fendi, Celine (brand), Loewe (brand)]
+      brands: [Louis Vuitton, Moët & Chandon, Bulgari, Tiffany & Co., Fendi, Celine (brand)]
+      # REMOVED pending a verified title:
+      #   "Loewe (brand)"                  -> redirects to "Löwe", a different entity
+      #   "Christian Dior (fashion house)" -> redirects to "Dior", colliding with
+      #     the corporate article of Christian Dior SE (see the removed CDI.PA
+      #     entry below). A brand article that resolves onto another listed
+      #     company's corporate article cannot be told apart from it.
       people: [Bernard Arnault, Delphine Arnault, Pharrell Williams]
 
   - ticker: RMS.PA
@@ -100,15 +106,24 @@ companies:
       brands: [Omega SA, Longines, Tissot, Swatch, Breguet (brand)]
       people: [Nick Hayek Jr.]
 
-  - ticker: CDI.PA
-    name: Christian Dior SE
-    # NOTE: the holding company and the fashion house are distinct Wikipedia
-    # articles that a naive title match collapses. Keeping them separate is the
-    # difference between measuring investor attention and consumer attention.
-    articles:
-      corporate: Christian Dior SE
-      brands: [Christian Dior (fashion house), Dior Homme]
-      people: [Maria Grazia Chiuri]
+  # REMOVED: CDI.PA (Christian Dior SE)
+  #
+  # Two independent reasons, both found by `validate-universe` on the first
+  # live run, and both decided BEFORE any modelling:
+  #
+  # 1. Article collision. "Christian Dior SE" and "Christian Dior (fashion
+  #    house)" both redirect to "Dior" on en.wikipedia, so its corporate series
+  #    would have been numerically identical to an LVMH brand series. The
+  #    assumption written in the old comment here -- that the holding company
+  #    and the fashion house are distinct articles -- was simply false.
+  #
+  # 2. It is not an independent entity. Christian Dior SE's main asset is a
+  #    ~42% stake in LVMH, making it close to a levered LVMH proxy. Two panel
+  #    rows tracking one underlying asset inflate the effective sample size
+  #    that every clustered standard error is computed from.
+  #
+  # To restore it, give it a verified corporate article that does not resolve
+  # to "Dior", and treat CDI.PA and MC.PA as one cluster rather than two.
 
   - ticker: 1913.HK
     name: Prada
@@ -275,7 +290,10 @@ companies:
     name: Levi Strauss
     articles:
       corporate: Levi Strauss & Co.
-      brands: [Levi's 501]
+      # NOTE: "Levi's 501" was removed here -- on en.wikipedia it redirects to
+      # the corporate article above, so keeping it would have counted the same
+      # series twice, once as corporate attention and once as brand attention.
+      # A verified title for a distinct product article can be added back.
 
   - ticker: DECK
     name: Deckers Outdoor
@@ -285,6 +303,10 @@ companies:
 
   - ticker: SKX
     name: Skechers
+    # yfinance returns no data at all: taken private by 3G Capital in 2025.
+    # CONFIRM THIS DATE before use -- it sets where the series is allowed to
+    # end, and a wrong one would silently truncate or extend the panel.
+    delisted_on: 2025-09-12
     articles:
       corporate: Skechers
 

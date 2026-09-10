@@ -38,7 +38,7 @@ from .market import (
     to_stooq_symbol,
     validate_ohlcv,
 )
-from .mediawiki import resolve_titles
+from .mediawiki import find_title_collisions, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
 
 log = logging.getLogger("attention_panel")
@@ -124,71 +124,134 @@ def cmd_validate_universe(args) -> int:
     Reports rather than fixes. Silently correcting a universe would hide the
     fact that it was wrong, and a universe that changed after the results were
     seen is no longer a pre-registered universe.
+
+    Exits non-zero if anything needs attention, so it can gate a fetch.
     """
     universe = load_universe(args.universe)
     client = make_client(args)
+    failures: list[str] = []
+
+    # -- articles -----------------------------------------------------------
 
     print(f"Resolving {len(universe.article_titles)} titles on en.wikipedia ...")
     report = resolve_titles(client, "en", list(universe.article_titles), with_redirects=False)
     print(f"  {report.summary()}")
 
     if report.missing:
-        print("\nTITLES THAT DO NOT EXIST (fix these in the YAML):")
+        print("\nTITLES THAT DO NOT EXIST")
+        print("Candidates from the wiki's own search; verify one and put it in the YAML.")
+        print("Do not guess -- a plausible but wrong title resolves silently to another")
+        print("entity's traffic, which is worse than a missing one.\n")
         for title in sorted(report.missing):
-            print(f"  - {title}")
+            print(f"  {title}")
+            for hit in search_titles(client, "en", title, limit=4):
+                print(f"      -> {hit['title']}")
+            failures.append(f"missing title: {title}")
+
+    # -- collisions: the check that matters most -----------------------------
+
+    collisions = find_title_collisions(report.resolved)
+    if collisions:
+        owner = _title_owners(universe)
+        print("\nCOLLISIONS: distinct entries resolving to the SAME article")
+        print("Each group below would produce one identical pageview series under several")
+        print("names. Across companies that gives two panel entities the same regressor;")
+        print("within a company it collapses the brand/corporate distinction the feature")
+        print("design depends on. Both must be fixed before fetching.\n")
+        for canonical, titles in sorted(collisions.items()):
+            print(f"  {canonical}")
+            for title in titles:
+                print(f"      <- {title}   [{', '.join(owner.get(title, ['theme']))}]")
+            failures.append(f"collision on {canonical}")
 
     if report.redirected:
-        print("\nTitles that are redirects (harmless, resolved automatically):")
+        print("\nTitles that are redirects (resolved automatically).")
+        print("Skim these anyway: a redirect can land on a DIFFERENT entity, which no")
+        print("automated check can catch.\n")
         for requested, canonical in sorted(report.redirected):
-            print(f"  - {requested} -> {canonical}")
+            print(f"  {requested} -> {canonical}")
+
+    # -- tickers ------------------------------------------------------------
 
     print(f"\nChecking {len(universe.companies)} tickers against yfinance and Stooq ...")
-    start = dt.date.today() - dt.timedelta(days=365)
-    end = dt.date.today()
-    problems: list[str] = []
+    start_date = dt.date.today() - dt.timedelta(days=365)
+    end_date = dt.date.today()
+    stooq_reasons: list[str] = []
 
     for company in universe.companies:
-        stooq_symbol = to_stooq_symbol(company.ticker)
         try:
-            yahoo = fetch_yfinance(company.ticker, start, end)
+            yahoo = fetch_yfinance(company.ticker, start_date, end_date)
         except Exception as exc:  # yfinance raises a different type every release
             print(f"  {company.ticker:12s} yfinance ERROR: {exc}")
-            problems.append(company.ticker)
+            failures.append(f"{company.ticker}: yfinance error")
             continue
-
-        stooq = fetch_stooq(client, company.ticker, start, end) if stooq_symbol else None
-        checks = validate_ohlcv(yahoo, company.ticker)
 
         if yahoo.empty:
             # A delisted name having no recent data is expected, not a problem.
-            expected = company.delisted_on is not None
-            status = "no recent data (delisted, expected)" if expected else "NO DATA"
-            print(f"  {company.ticker:12s} {status}")
-            if not expected:
-                problems.append(company.ticker)
+            if company.delisted_on is not None:
+                print(f"  {company.ticker:12s} no recent data (delisted {company.delisted_on}, expected)")
+            else:
+                print(f"  {company.ticker:12s} NO DATA -- delisted? add `delisted_on:` to the YAML")
+                failures.append(f"{company.ticker}: no data")
             continue
 
-        line = f"  {company.ticker:12s} {checks['rows']:4d} rows  {checks['first_date']}..{checks['last_date']}"
-        if stooq is not None and not stooq.empty:
-            agreement = cross_check(yahoo, stooq)
-            line += f"  stooq={stooq_symbol} mismatches={agreement['mismatches']}"
+        checks = validate_ohlcv(yahoo, company.ticker)
+        line = (
+            f"  {company.ticker:12s} {checks['rows']:4d} rows  "
+            f"{checks['first_date']}..{checks['last_date']}"
+        )
+
+        stooq = fetch_stooq(client, company.ticker, start_date, end_date, args.stooq_user_agent)
+        if stooq.ok:
+            agreement = cross_check(yahoo, stooq.frame)
+            line += f"  stooq ok, mismatches={agreement['mismatches']}"
             if agreement["mismatches"]:
-                problems.append(f"{company.ticker} (source disagreement)")
-        elif stooq_symbol:
-            line += f"  stooq={stooq_symbol} UNRESOLVED"
-        for flag in ("high_below_others", "low_above_others", "extreme_moves"):
+                failures.append(f"{company.ticker}: sources disagree")
+        else:
+            line += "  stooq FAILED"
+            stooq_reasons.append(stooq.reason)
+
+        for flag in ("high_below_others", "low_above_others", "extreme_moves", "unusable_bars"):
             if checks.get(flag):
                 line += f"  {flag}={checks[flag]}"
-                problems.append(f"{company.ticker} ({flag})")
         print(line)
 
+    if stooq_reasons:
+        print(f"\nSTOOQ CROSS-CHECK UNAVAILABLE for {len(stooq_reasons)} tickers.")
+        print("Stooq answers nearly everything with HTTP 200, so the body is the only")
+        print("evidence of what went wrong. Distinct responses seen:\n")
+        for reason in sorted({_strip_symbol(r) for r in stooq_reasons})[:5]:
+            print(f"  {reason}")
+        print("\nThis degrades the cross-check but does not block anything: yfinance is")
+        print("the primary source and the structural checks above still run. Try a")
+        print("different agent with --stooq-user-agent if the body suggests one.")
+
     print("\n" + "=" * 70)
-    if problems or report.missing:
-        print(f"{len(set(problems))} tickers and {len(report.missing)} titles need attention.")
-        print("Fix the YAML before fetching: an unvalidated universe is not pre-registered.")
+    if failures:
+        print(f"{len(failures)} problems need attention:")
+        for problem in failures[:20]:
+            print(f"  - {problem}")
+        if len(failures) > 20:
+            print(f"  ... and {len(failures) - 20} more")
+        print("\nFix the YAML before fetching: an unvalidated universe is not pre-registered.")
         return 1
-    print("Universe validated: every title and ticker resolves, sources agree.")
+    print("Universe validated: every title resolves uniquely and every ticker has data.")
     return 0
+
+
+def _title_owners(universe) -> dict[str, list[str]]:
+    """Map each article title to the `ticker/family` entries that requested it."""
+    owners: dict[str, list[str]] = {}
+    for company in universe.companies:
+        for article in company.articles:
+            owners.setdefault(article.title, []).append(f"{company.ticker}/{article.family.value}")
+    return owners
+
+
+def _strip_symbol(reason: str) -> str:
+    """Drop the leading `symbol: ` so identical failures collapse into one line."""
+    _, sep, rest = reason.partition(": ")
+    return rest if sep else reason
 
 
 # ---------------------------------------------------------------------------
@@ -282,8 +345,9 @@ def cmd_fetch_market(args) -> int:
             continue
 
         checks = validate_ohlcv(yahoo, company.ticker)
-        stooq = fetch_stooq(client, company.ticker, start, end)
-        checks.update({f"xcheck_{k}": v for k, v in cross_check(yahoo, stooq).items()})
+        stooq = fetch_stooq(client, company.ticker, start, end, args.stooq_user_agent)
+        checks["stooq_reason"] = stooq.reason
+        checks.update({f"xcheck_{k}": v for k, v in cross_check(yahoo, stooq.frame).items()})
         checks.pop("extreme_move_dates", None)
         checks.pop("xcheck_mismatch_dates", None)
         quality.append(checks)
@@ -308,6 +372,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="attention_panel", description=__doc__)
     parser.add_argument("--user-agent", default=None, help=f"overrides ${UA_ENV_VAR}")
     parser.add_argument("--cache-dir", default=".httpcache")
+    parser.add_argument(
+        "--stooq-user-agent",
+        default=None,
+        help="agent to send to Stooq only; Wikimedia's contact requirement does not "
+             "apply to an unrelated CSV host, so the two are set separately",
+    )
     parser.add_argument("--out", default=str(DATA_DIR))
     parser.add_argument("--start", default=None, help="YYYY-MM-DD (default: 2015-07-01)")
     parser.add_argument("--end", default=None, help="YYYY-MM-DD (default: today)")

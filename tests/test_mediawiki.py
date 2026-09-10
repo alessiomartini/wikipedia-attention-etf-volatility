@@ -101,3 +101,40 @@ def test_incoming_redirects_follows_continuation(fake_client):
     assert client.calls[1]["rdcontinue"] == "next"
     # The bare `continue` key must not be echoed back as a query parameter.
     assert "continue" not in client.calls[1]
+
+
+def test_collisions_are_detected_when_two_titles_share_one_article():
+    """The failure live validation found: two universe entries, one series.
+
+    'Christian Dior (fashion house)' is a brand of LVMH and 'Christian Dior SE'
+    is the corporate article of a separately listed company, but en.wikipedia
+    redirects both to 'Dior'. Undetected, two panel entities would carry an
+    identical regressor while every clustered standard error treated them as
+    independent evidence.
+    """
+    from attention_panel.mediawiki import ResolvedArticle, find_title_collisions
+
+    resolved = {
+        "Christian Dior (fashion house)": ResolvedArticle("Christian Dior (fashion house)", "Dior"),
+        "Christian Dior SE": ResolvedArticle("Christian Dior SE", "Dior"),
+        "Gucci": ResolvedArticle("Gucci", "Gucci"),
+        "No Such Brand": ResolvedArticle("No Such Brand", None, missing=True),
+    }
+    collisions = find_title_collisions(resolved)
+
+    assert collisions == {"Dior": ["Christian Dior (fashion house)", "Christian Dior SE"]}
+    assert "Gucci" not in collisions          # a unique title is not a collision
+    # A missing title has no canonical article, so it cannot collide with
+    # another missing one -- they must not be grouped together under None.
+    assert None not in collisions
+
+
+def test_search_returns_candidates_for_a_title_that_does_not_exist(fake_client):
+    """The validator proposes; the author confirms. Nobody guesses."""
+    from attention_panel.mediawiki import search_titles
+
+    client = fake_client(
+        {"list=search": {"query": {"search": [{"title": "Ugg boots", "snippet": "..."}]}}}
+    )
+    results = search_titles(client, "en", "Ugg (brand)")
+    assert results[0]["title"] == "Ugg boots"

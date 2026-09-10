@@ -32,6 +32,7 @@ import datetime as dt
 import io
 import logging
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -110,30 +111,83 @@ def to_stooq_symbol(ticker: str) -> str | None:
     return base.replace("-", "").lower() + mapped
 
 
-def fetch_stooq(client: HttpClient, ticker: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+@dataclass
+class StooqResult:
+    """A Stooq fetch, with the reason it failed when it did.
+
+    WHY THE REASON IS RETURNED RATHER THAN LOGGED AWAY
+
+    Stooq answers almost everything with HTTP 200: an unknown symbol, a
+    rate-limit refusal and a real CSV all arrive as a successful response with
+    a different body. A caller that only sees an empty frame cannot tell a
+    company that has no Stooq listing from a client that is being throttled --
+    and those need opposite responses. The first live run of the validator hit
+    exactly this: every symbol failed, including plain US tickers, which rules
+    out the exchange-suffix table and points at the request itself. Carrying
+    the body prefix back is what turns that into a diagnosable fact.
+    """
+
+    frame: pd.DataFrame
+    reason: str = ""  # empty when the fetch succeeded
+
+    @property
+    def ok(self) -> bool:
+        return not self.frame.empty
+
+
+#: Stooq is a plain file server with no documented API and no stated agent
+#: policy. It is given a descriptive agent like every other upstream, but as a
+#: SEPARATE value: Wikimedia's requirement is a contact address, which is not
+#: something an unrelated CSV host has asked for, and the two should not have
+#: to change together.
+STOOQ_USER_AGENT = "attention-panel/0.1 (research; contact via repository)"
+
+
+def fetch_stooq(
+    client: HttpClient,
+    ticker: str,
+    start: dt.date,
+    end: dt.date,
+    user_agent: str | None = None,
+) -> StooqResult:
     """Daily OHLCV from Stooq's free CSV endpoint. No API key required."""
     symbol = to_stooq_symbol(ticker)
     if symbol is None:
-        log.info("no Stooq mapping for %s; cross-check skipped", ticker)
-        return _empty_ohlcv()
+        return StooqResult(_empty_ohlcv(), f"no Stooq suffix mapped for {ticker!r}")
 
     body = client.get_text(
         "https://stooq.com/q/d/l/",
         params={"s": symbol, "d1": f"{start:%Y%m%d}", "d2": f"{end:%Y%m%d}", "i": "d"},
+        headers={"User-Agent": user_agent or STOOQ_USER_AGENT},
         policy=CachePolicy.VOLATILE,
         allow_404=True,
     )
-    # Stooq answers an unknown symbol with HTTP 200 and the body "No data",
-    # so the status code alone is not enough to detect failure.
-    if not body or not body.lstrip().lower().startswith("date"):
-        return _empty_ohlcv()
 
-    frame = pd.read_csv(io.StringIO(body))
+    if body is None:
+        return StooqResult(_empty_ohlcv(), f"{symbol}: HTTP 404")
+    if not body.strip():
+        return StooqResult(_empty_ohlcv(), f"{symbol}: empty response body")
+
+    # Not CSV. The body is the only evidence of what went wrong, so a prefix of
+    # it is carried back verbatim rather than discarded.
+    if not body.lstrip().lower().startswith("date"):
+        prefix = " ".join(body.strip().split())[:160]
+        return StooqResult(_empty_ohlcv(), f"{symbol}: not CSV -> {prefix!r}")
+
+    try:
+        frame = pd.read_csv(io.StringIO(body))
+    except (pd.errors.ParserError, ValueError) as exc:
+        return StooqResult(_empty_ohlcv(), f"{symbol}: unparseable CSV ({exc})")
+
     frame.columns = [c.strip().lower() for c in frame.columns]
     if "volume" not in frame:
         frame["volume"] = np.nan
+    missing = [c for c in ("date", "open", "high", "low", "close") if c not in frame.columns]
+    if missing:
+        return StooqResult(_empty_ohlcv(), f"{symbol}: CSV missing columns {missing}")
+
     frame["date"] = pd.to_datetime(frame["date"])
-    return frame.set_index("date")[OHLCV_COLUMNS].sort_index()
+    return StooqResult(frame.set_index("date")[OHLCV_COLUMNS].sort_index())
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +223,10 @@ def validate_ohlcv(frame: pd.DataFrame, ticker: str) -> dict[str, object]:
     report["high_below_others"] = int((h < np.maximum(o, c) - tol).sum())
     report["low_above_others"] = int((l > np.minimum(o, c) + tol).sum())
     report["high_below_low"] = int((h < l - tol).sum())
+
+    # How many bars the volatility estimators will actually be able to use.
+    # Reported so the loss is visible rather than inferred from a row count.
+    report["unusable_bars"] = int((~consistent_bars(frame, tol)).sum())
 
     # A zero range means high == low: a halted, suspended or untraded day.
     # These must be excluded from the volatility estimator rather than fed to
@@ -225,6 +283,37 @@ def cross_check(primary: pd.DataFrame, secondary: pd.DataFrame, tolerance: float
 # ---------------------------------------------------------------------------
 
 
+def consistent_bars(frame: pd.DataFrame, tol: float = 1e-6) -> pd.Series:
+    """Boolean mask of bars a range estimator may be applied to.
+
+    A bar is usable only if it is internally consistent: strictly positive
+    prices, a strictly positive range, and a high and low that really are the
+    day's extremes. `validate_ohlcv` counts violations for the data-quality
+    table; this is the mask that keeps them OUT OF THE NUMBERS.
+
+    Both are needed, and the distinction matters. Live validation found single
+    corrupt bars in real vendor data -- one in Signet, one in Samsonite, out of
+    ~250 days each -- where the reported high sat below the close. Such a bar
+    does not fail loudly: `ln(H/L)` is still finite, so it yields a plausible
+    variance that is simply wrong, on a day the study would otherwise treat as
+    an ordinary observation. Excluding it costs one day out of 250; keeping it
+    puts a fabricated number in the target column.
+
+    Zero-range bars (high == low: halted, suspended, untraded) are excluded for
+    a different reason -- their variance is zero, which is negative infinity in
+    logs, and the panel is modelled in logs.
+    """
+    o, h, l, c = (frame[k].astype(float) for k in ("open", "high", "low", "close"))
+    return (
+        (o > 0)
+        & (c > 0)
+        & (l > 0)
+        & (h > l)                             # a real range, not a halted day
+        & (h >= np.maximum(o, c) - tol)       # the high really is the maximum
+        & (l <= np.minimum(o, c) + tol)       # the low really is the minimum
+    )
+
+
 def garman_klass_variance(frame: pd.DataFrame) -> pd.Series:
     """Daily variance from the full OHLC bar (Garman & Klass, 1980).
 
@@ -246,11 +335,7 @@ def garman_klass_variance(frame: pd.DataFrame) -> pd.Series:
     and `realized_variance` combines the two.
     """
     o, h, l, c = (frame[k].astype(float) for k in ("open", "high", "low", "close"))
-
-    # Zero-range or non-positive bars are halted/untraded days. They are made
-    # NaN rather than zero: a zero variance becomes -inf in logs and would
-    # dominate every regression it entered.
-    valid = (h > l) & (o > 0) & (c > 0) & (l > 0)
+    valid = consistent_bars(frame)
 
     hl = np.log(h.where(valid) / l.where(valid))
     co = np.log(c.where(valid) / o.where(valid))
@@ -271,7 +356,7 @@ def parkinson_variance(frame: pd.DataFrame) -> pd.Series:
     the other is an estimator artefact rather than a finding.
     """
     h, l = frame["high"].astype(float), frame["low"].astype(float)
-    valid = (h > l) & (l > 0)
+    valid = consistent_bars(frame)
     hl = np.log(h.where(valid) / l.where(valid))
     variance = hl**2 / (4.0 * math.log(2.0))
     return variance.where(variance > 0).rename("parkinson_variance")

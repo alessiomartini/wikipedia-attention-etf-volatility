@@ -287,7 +287,47 @@ the invariance directly rather than trusting the claim.
 
 ---
 
-## 10. Open items
+## 10. Universe change log
+
+A pre-registered universe that changes without a record is not pre-registered.
+Every change made after the file was first written is listed here, with the
+reason and the date, so a reader can check that no change followed a result.
+
+**No modelling has been run at any point below.** These are all data-quality
+findings from `validate-universe`, made before any target was regressed on
+anything.
+
+### 2026-09-10 — first live validation run
+
+| Change | Reason |
+| --- | --- |
+| `CDI.PA` (Christian Dior SE) **removed** | Its corporate article and an LVMH brand article both redirect to `Dior` on en.wikipedia, so the two series would have been numerically identical. Separately, Christian Dior SE's main asset is a ~42% stake in LVMH, so it is close to a levered LVMH proxy rather than an independent panel entity. |
+| `Levi's 501` **removed** from LEVI brands | Redirects to `Levi Strauss & Co.`, the company's own corporate article: it would have counted one series twice, as corporate and as brand attention. |
+| `Loewe (brand)` **removed** from LVMH brands | Resolves to `Löwe`, a different entity. Pending a verified title. |
+| `SKX` marked `delisted_on: 2025-09-12` | yfinance returns no data; taken private in 2025. Date still to be confirmed. |
+| Six titles left unresolved | `Daniel Lee (fashion designer)`, `La Mer (brand)`, `La Prairie (company)`, `Timberland (brand)`, `Ugg (brand)`, `Watches of Switzerland Group` do not exist. The validator now proposes candidates from the wiki's own search; a human confirms each one rather than guessing. |
+
+### What the run changed in the code, not the universe
+
+- **Title collisions are now a hard error.** The validator checked that each
+  title resolved, not that it resolved to something *distinct*. Two entries
+  landing on one article produce one series under two names — across companies
+  that gives two panel rows an identical regressor while every clustered
+  standard error treats them as independent evidence.
+- **Internally inconsistent OHLC bars are excluded from the estimators**, not
+  merely counted. Live data contained single bars whose reported high sat below
+  the close (one in Signet, one in Samsonite). `ln(H/L)` stays finite on such a
+  bar, so it yields a plausible but fabricated variance on a day that looks
+  ordinary. §9's claim that two sources make silent corruption visible held —
+  the structural checks caught these without needing the second source.
+- **Stooq returns a failure reason.** It answers nearly everything with HTTP
+  200, so an empty frame cannot distinguish an unlisted symbol from a throttled
+  client. The cross-check was unavailable for every ticker on the first run,
+  including plain US symbols, which rules out the exchange-suffix table.
+
+---
+
+## 11. Open items
 
 - **[OPEN]** Whether Tier 2 uses point-in-time index membership. Until it does,
   Tier 2 results carry survivorship bias and must be reported with it stated.

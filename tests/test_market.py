@@ -161,3 +161,43 @@ def test_stooq_symbol_translation(yahoo, stooq):
 def test_unmapped_exchange_returns_none_rather_than_guessing():
     """A wrong Stooq symbol would silently cross-check against another company."""
     assert market.to_stooq_symbol("ABC.XYZ") is None
+
+
+def test_an_internally_inconsistent_bar_is_excluded_from_the_estimators():
+    """The failure mode found in live vendor data: a high below the close.
+
+    `ln(H/L)` stays finite on such a bar, so it produces a plausible but
+    fabricated variance on a day the study would otherwise treat as ordinary.
+    It has to be excluded from the numbers, not merely counted in a report.
+    """
+    frame = pd.DataFrame(
+        {
+            "open": [100.0, 100.0],
+            "high": [110.0, 101.0],   # second bar: high sits below the close
+            "low": [90.0, 95.0],
+            "close": [105.0, 105.0],
+            "volume": [1e6, 1e6],
+        },
+        index=pd.date_range("2024-01-02", periods=2, freq="B", name="date"),
+    )
+
+    assert list(market.consistent_bars(frame)) == [True, False]
+    assert np.isnan(market.garman_klass_variance(frame).iloc[1])
+    assert np.isnan(market.parkinson_variance(frame).iloc[1])
+    assert np.isnan(market.realized_variance(frame).iloc[1])
+
+    report = market.validate_ohlcv(frame, "TEST")
+    assert report["high_below_others"] == 1
+    assert report["unusable_bars"] == 1
+
+
+def test_a_low_above_the_open_is_also_excluded():
+    frame = pd.DataFrame(
+        {
+            "open": [100.0], "high": [110.0], "low": [102.0],  # low above the open
+            "close": [105.0], "volume": [1e6],
+        },
+        index=pd.DatetimeIndex(pd.to_datetime(["2024-01-02"]), name="date"),
+    )
+    assert not market.consistent_bars(frame).iloc[0]
+    assert np.isnan(market.garman_klass_variance(frame).iloc[0])

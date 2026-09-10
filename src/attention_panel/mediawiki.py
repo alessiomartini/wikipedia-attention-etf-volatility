@@ -239,3 +239,62 @@ def page_moves(client: HttpClient, lang: str, title: str) -> list[dict]:
 def _chunks(items: list[str], size: int):
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def search_titles(client: HttpClient, lang: str, query: str, limit: int = 5) -> list[dict]:
+    """Search a wiki for candidate articles matching a title.
+
+    Used by `validate-universe` to propose replacements for titles that do not
+    exist. The point is to keep a human in the loop without making them guess:
+    the API proposes, the author confirms, and the universe file records a
+    title someone actually verified.
+
+    Guessing replacements is what produced the broken titles in the first
+    place, and a plausible-but-wrong title is worse than a missing one -- it
+    resolves silently to another entity's traffic.
+    """
+    payload = client.get_json(
+        api_url(lang),
+        params={
+            "action": "query",
+            "format": "json",
+            "formatversion": "2",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": str(limit),
+            "srnamespace": "0",
+            "srprop": "snippet",
+        },
+        policy=CachePolicy.VOLATILE,
+    )
+    if payload is None:
+        return []
+    return list(payload.get("query", {}).get("search", ()))
+
+
+def find_title_collisions(resolved: dict[str, ResolvedArticle]) -> dict[str, list[str]]:
+    """Group requested titles by the canonical article they land on.
+
+    Returns only the groups with more than one member -- the collisions.
+
+    WHY THIS IS A HARD ERROR AND NOT A WARNING
+
+    Two distinct entries in a universe that resolve to the same article produce
+    the SAME pageview series under two names. Live validation found exactly
+    this: "Christian Dior (fashion house)" (a brand of LVMH) and
+    "Christian Dior SE" (the corporate article of a separately listed company)
+    both redirect to "Dior" on en.wikipedia. Left undetected, two entities of
+    the panel would carry a numerically identical regressor, and every
+    clustered standard error would treat them as independent evidence.
+
+    The same failure inside one company is subtler and just as wrong: a brand
+    article redirecting to its parent ("Levi's 501" -> "Levi Strauss & Co.")
+    silently double-counts corporate attention as brand attention, collapsing
+    a distinction the feature design depends on.
+    """
+    groups: dict[str, list[str]] = {}
+    for requested, article in resolved.items():
+        if article.canonical is None:
+            continue
+        groups.setdefault(article.canonical, []).append(requested)
+    return {canonical: sorted(titles) for canonical, titles in groups.items() if len(titles) > 1}
