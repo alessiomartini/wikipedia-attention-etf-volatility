@@ -56,7 +56,7 @@ dressed up as a result. Only $t-1$ and $t-2$ are available to the model. In prin
 ### 4. Walk-forward validation
 
 Standard $k$-fold cross-validation shuffles time and lets the model train on the
-future to predict the past. This uses scikit-learn's `TimeSeriesSplit` with five
+future to predict the past. (THIS IS STANDARD FOR TIME SERIES AND FORECASTING). This uses scikit-learn's `TimeSeriesSplit` with five
 folds instead, so training always precedes testing:
 
 ```
