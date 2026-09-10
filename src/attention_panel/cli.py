@@ -1,18 +1,23 @@
 """Command line entry points for the ingestion stage.
 
-    python -m attention_panel.cli plan               config/universe_luxury.yaml
-    python -m attention_panel.cli validate-universe  config/universe_luxury.yaml
-    python -m attention_panel.cli fetch-attention    config/universe_luxury.yaml
-    python -m attention_panel.cli fetch-market       config/universe_luxury.yaml
+    plan               what a full fetch would cost      offline
+    validate-universe  every title and ticker resolves   Wikimedia + prices
+    check-sources      which price source covers what    prices only
+    fetch-attention    the multilingual pageview series  Wikimedia
+    fetch-market       daily OHLCV, cross-checked        prices only
+    fetch-macro        FRED control series               FRED, no key needed
 
-`plan` works offline. The other three need network access and a contact
-address in the User-Agent, which Wikimedia requires -- set it once:
+Commands that talk to Wikimedia need a contact address in the User-Agent, which
+Wikimedia requires. Set it once:
 
     export ATTENTION_PANEL_UA="attention-panel/0.1 (https://github.com/<you>/<repo>; <you>@example.com)"
 
+(`set` on Windows CMD, `$env:` in PowerShell -- the error message prints all
+three if it is missing.)
+
 RUN `validate-universe` FIRST. The shipped universe file was written without
-access to any of these APIs, so its tickers and article titles are unverified
-by construction; the validator is what turns them from plausible into checked.
+access to any of these APIs, so its tickers and article titles are unverified by
+construction; the validator is what turns them from plausible into checked.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import requests
 from .config import load_universe
 from .httpcache import HttpClient, RateLimitError
 from .market import build_market_features, cross_check, validate_ohlcv
+from .macro import build_macro_frame
 from .sources import YahooSource, available_cross_checks, exchange_of
 from .mediawiki import find_title_collisions, resolve_titles, search_titles
 from .pageviews import EARLIEST_DATE, article_frame, bot_divergence
@@ -260,6 +266,50 @@ def _title_owners(universe) -> dict[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# fetch-macro
+# ---------------------------------------------------------------------------
+
+
+def cmd_fetch_macro(args) -> int:
+    """Download the FRED control series, aligned without look-ahead.
+
+    These do NOT enter the primary panel specification: time fixed effects
+    already absorb everything common to all firms on a day, so a macro
+    regressor there is exactly collinear with the day dummies. They are for the
+    aggregate test, which has no time fixed effects to do that absorbing, and
+    for the interaction hypotheses that survive them -- `attention x VIX` and
+    `attention x FX exposure` vary across firms within a day, so the day dummies
+    leave them alone.
+    """
+    client = make_client(args)
+    start, end = _date_range(args)
+
+    # A business-day calendar rather than a real exchange calendar: this is a
+    # superset of every venue's trading days, and the panel builder intersects
+    # it with each ticker's own dates anyway. Using it here would only matter
+    # if a value were invented on a holiday, and `to_daily` bounds the fill.
+    calendar = pd.date_range(start, end, freq="B")
+
+    frame = build_macro_frame(client, calendar, start, end)
+    out_path = Path(args.out) / "macro.csv.gz"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(out_path, compression="gzip")
+
+    print(f"wrote {out_path}  ({len(frame)} days x {frame.shape[1]} series)")
+    print("\ncoverage (non-null share over the requested window):")
+    for column in frame.columns:
+        share = float(frame[column].notna().mean())
+        flag = "  <-- mostly empty, check the series id" if share < 0.5 else ""
+        print(f"  {column:12s} {share:6.1%}{flag}")
+    print(
+        "\nSeries are stored as LEVELS. Making them stationary is the panel builder's"
+        "\njob: a rate and a volatility index need different transforms, and hiding"
+        "\nthat choice in the fetch layer would keep it out of the specification."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # check-sources
 # ---------------------------------------------------------------------------
 
@@ -466,16 +516,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true")
 
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, handler, help_text in (
-        ("plan", cmd_plan, "print the fetch plan without touching the network"),
-        ("validate-universe", cmd_validate_universe, "check every title and ticker resolves"),
-        ("fetch-attention", cmd_fetch_attention, "download the multilingual pageview series"),
-        ("fetch-market", cmd_fetch_market, "download and cross-check daily OHLCV"),
-        ("check-sources", cmd_check_sources, "probe each price source, one ticker per exchange"),
+    # `needs_universe` is False only for commands that genuinely do not read
+    # one. Demanding an argument a command ignores trains users to pass
+    # whatever silences the parser, which is how a wrong path stops being
+    # noticed.
+    for name, handler, needs_universe, help_text in (
+        ("plan", cmd_plan, True, "print the fetch plan without touching the network"),
+        ("validate-universe", cmd_validate_universe, True, "check every title and ticker resolves"),
+        ("check-sources", cmd_check_sources, True, "probe each price source, one ticker per exchange"),
+        ("fetch-attention", cmd_fetch_attention, True, "download the multilingual pageview series"),
+        ("fetch-market", cmd_fetch_market, True, "download and cross-check daily OHLCV"),
+        ("fetch-macro", cmd_fetch_macro, False, "download FRED control series (no API key needed)"),
     ):
         sub_parser = sub.add_parser(name, help=help_text)
-        sub_parser.add_argument("universe", help="path to a universe YAML file")
-        sub_parser.set_defaults(handler=handler)
+        if needs_universe:
+            sub_parser.add_argument("universe", help="path to a universe YAML file")
+        sub_parser.set_defaults(handler=handler, needs_universe=needs_universe)
 
     return parser
 
@@ -486,8 +542,8 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
-    universe_path = Path(getattr(args, "universe", ""))
-    if not universe_path.exists():
+    universe_path = Path(getattr(args, "universe", "") or "")
+    if getattr(args, "needs_universe", True) and not universe_path.exists():
         print(f"universe file not found: {universe_path}", file=sys.stderr)
         print(
             "\nPaths are relative to the current directory, so this usually means the shell "

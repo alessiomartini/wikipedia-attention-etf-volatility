@@ -265,7 +265,14 @@ All free, no API key anywhere in the pipeline.
 | Attention | Wikimedia Pageviews API | daily per-article, per-language series |
 | Article identity | MediaWiki Action API | canonical titles, redirect graph, page moves, QIDs |
 | Universe | Wikidata SPARQL | listings (P414), tickers (P249), ISIN (P946), sitelinks |
-| Market | `yfinance` | daily OHLCV, the only price source |
+| Market | `yfinance` | daily OHLCV, primary price source |
+| Market | Twelve Data / Alpha Vantage | optional cross-check, free API key |
+| Macro | FRED `fredgraph.csv` | control series, **no API key required** |
+
+Note on Alpha Vantage: its free tier is now **25 calls per day**, not the 500
+that older write-ups still quote (it went 500 → 100 → 25). That rules it out as
+a primary source — 48 tickers would take two days — but not as an occasional
+cross-check, which does not need to run daily.
 
 **The two-source design was tried and abandoned.** The reasoning behind it
 stands: the failure mode that threatens the result is not downtime but a
@@ -323,7 +330,63 @@ the invariance directly rather than trusting the claim.
 
 ---
 
-## 10. Universe change log
+## 10. Macro controls, and two hypotheses they make possible **[DECIDED]**
+
+The primary specification has time fixed effects, which absorb everything
+common to all firms on a given day — including every macro variable. Adding VIX
+or EUR/USD there is not merely unnecessary; it is exactly collinear with the day
+dummies and would be dropped. So macro data is deliberately **not** part of the
+primary test. It earns its place four other ways, and two of them are new
+hypotheses rather than housekeeping.
+
+**1. The aggregate test has no time fixed effects.** The secondary
+specification regresses sector-ETF volatility on aggregate attention. There is
+no cross-section, so nothing absorbs the market factor, and an uncontrolled
+result there is close to meaningless — attention rises on days the whole market
+is agitated.
+
+**2. Regime interaction [PRE-REGISTERED HERE, BEFORE RUNNING].**
+`attention_i,t × VIX_t` is **not** absorbed by time fixed effects even though
+`VIX_t` alone is, because the interaction varies across firms within a day. It
+asks what the base specification cannot: *does attention matter more when
+volatility is already elevated?* Both signs are defensible in advance — attention
+could matter more in calm markets, where it is the only news, or more in
+turbulent ones, where it amplifies. Stating that here is the point: a
+directional prediction invented after seeing the coefficient is not a prediction.
+
+**3. Exposure heterogeneity [PRE-REGISTERED HERE].** `attention_i,t ×
+FX_exposure_i` likewise survives time fixed effects, and asks whether attention
+transmits more strongly for firms with more foreign revenue. For a sector of
+exporters selling into China, Japan and the US, that is a mechanism rather than
+a fishing expedition.
+
+**4. Robustness without time fixed effects.** A reader who wants the
+specification without day dummies needs controls; dropping the dummies without
+them would be indefensible.
+
+### The look-ahead trap in monthly series
+
+FRED stamps a monthly observation with **the first day of the month it
+describes**, not the day it was published. Consumer sentiment for March is dated
+1 March and released in late March. Forward-filling from the stamped date hands
+the model a number weeks before anyone could have known it — a look-ahead bug no
+join would flag, and one that would inflate the apparent value of precisely the
+confounder controls the study leans on to answer "isn't this just a common
+driver?".
+
+Every series therefore carries an explicit `publication_lag_days`, applied
+before the fill: zero for daily market series, which are stamped with the day
+they were observed, and weeks for anything survey-based. The forward fill is
+also bounded, so a long hole stays visible as NaN instead of becoming invented
+observations.
+
+Series are stored as **levels**. Making them stationary is the panel builder's
+job: a rate and a volatility index need different transforms, and hiding that
+choice in the fetch layer would keep it out of the specification.
+
+---
+
+## 11. Universe change log
 
 A pre-registered universe that changes without a record is not pre-registered.
 Every change made after the file was first written is listed here, with the
@@ -366,7 +429,7 @@ anything.
 
 ---
 
-## 11. Open items
+## 12. Open items
 
 - **[OPEN]** Whether Tier 2 uses point-in-time index membership. Until it does,
   Tier 2 results carry survivorship bias and must be reported with it stated.

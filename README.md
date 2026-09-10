@@ -165,6 +165,7 @@ Everything used here is free and requires no API key.
 | Universe | Wikidata SPARQL | live | — | listings, tickers, sitelinks |
 | Market | `yfinance` | daily OHLCV | decades | primary, no key, no quota |
 | Market | Twelve Data / Alpha Vantage | daily OHLCV | decades | optional cross-check, free API key |
+| Macro | FRED `fredgraph.csv` | daily / monthly | decades | controls, **no API key** |
 
 **Why the price data is cross-checked at all.** The failure mode that threatens
 the result is not downtime — it is a silently wrong bar. An unadjusted split, a
@@ -221,8 +222,9 @@ src/attention_panel/
   pageviews.py                   the attention series, redirects summed, zero days filled
   sources.py                     every price vendor behind one interface, probed not assumed
   market.py                      bar validation; Garman-Klass, Parkinson, turnover
+  macro.py                       FRED controls, aligned with an explicit publication lag
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           67 tests, none of which touch the network
+tests/                           75 tests, none of which touch the network
 ```
 
 Not yet written: the panel builder, the attention transforms, the HAR baseline,
@@ -292,6 +294,9 @@ attention-panel validate-universe config/universe_luxury.yaml
 
 # 2b. Optional: which price sources actually cover this universe's exchanges?
 attention-panel check-sources config/universe_luxury.yaml
+
+# 2c. FRED control series. No API key needed.
+attention-panel fetch-macro
 
 # 3. Fetch. Settled history is cached permanently, so only the first run pays.
 attention-panel fetch-attention config/universe_luxury.yaml
