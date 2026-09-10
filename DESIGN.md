@@ -34,12 +34,32 @@ Asian attention move before the European open?" are *not answerable* under this
 design. That is the single upgrade path that would justify moving to hourly
 later; it is out of scope now.
 
-**Timezone discipline.** Pageview timestamps are UTC day boundaries. European
-exchanges close 17:30 CET. The pageview count for UTC day `D` is only published
-around `D+1` 05:00–09:00 UTC. Therefore the *earliest* tradable use of day `D`
-attention is the open of day `D+1`. Any feature that uses day-`D` attention to
-explain day-`D` volatility is a look-ahead bug, regardless of how the join is
-written.
+**Timezone discipline — corrected 2026-09-11.** Pageview timestamps are UTC day
+boundaries, and the count for day `D` is published the following morning, around
+`D+1` 05:00–09:00 UTC.
+
+This section previously said the earliest tradable use of day-`D` attention is
+"the open of day `D+1`". **That is true only for New York**, and the error was
+found while writing the features rather than by any check. Venue opens, in UTC:
+
+| Venue | Open (UTC) | One-day lag safe? |
+| --- | --- | --- |
+| Tokyo | 00:00 | **No** — the data does not exist yet |
+| Hong Kong | 01:30 | **No** |
+| London, Paris, Milan, Madrid, Frankfurt, Zurich, Stockholm, Copenhagen | 08:00 | **No** — inside the publication window |
+| New York | 14:30 | Yes |
+
+A uniform one-day lag would hand three quarters of this universe a number that
+did not exist when its session opened. The bug is invisible in a backtest: it
+produces a *better* result, not an error.
+
+So the lag is derived per venue from its opening hour
+(`features.availability_lag_days`), defaulting to **two days everywhere except
+the US**, and to two days for any unmapped venue. The asymmetry justifies the
+conservatism: an extra day of lag costs a little power, while a day of leakage
+invalidates the study. The publication hour is an *assumption*, and it is the
+first thing to measure empirically if the lag ever needs tightening — poll the
+API for yesterday's counts and record when they actually appear.
 
 ### 2.2 Unit of analysis: panel **[DECIDED]**
 
@@ -64,14 +84,14 @@ shocks are correlated across firms on the same day.
 
 Two tiers, run in this order and reported separately:
 
-**Tier 1 — pilot, pre-registered primary study.** 49 listed fashion, luxury and
+**Tier 1 — pilot, pre-registered primary study.** 48 listed fashion, luxury and
 premium-consumer names, where the multilingual angle has a genuine economic
 interpretation. The list lives in `config/universe_luxury.yaml`; a sample:
 
 `MC.PA` LVMH · `RMS.PA` Hermès · `KER.PA` Kering · `CFR.SW` Richemont ·
 `MONC.MI` Moncler · `BRBY.L` Burberry · `1913.HK` Prada · `CPRI` Capri ·
 `RL` Ralph Lauren · `TPR` Tapestry · `EL` Estée Lauder · `NKE` Nike ·
-`ADS.DE` adidas · `PUM.DE` Puma · `ZAL.DE` Zalando · `LULU` · `SKX` ·
+`ADS.DE` adidas · `PUM.DE` Puma · `ZAL.DE` Zalando · `LULU` ·
 `9983.T` Fast Retailing · `HM-B.ST` H&M · `ITX.MC` Inditex · `PVH` · `VFC` ·
 `DECK` · `ONON` · `BOSS.DE` Hugo Boss
 

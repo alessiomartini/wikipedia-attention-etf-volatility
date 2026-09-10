@@ -14,12 +14,21 @@ uses -- and it fixes what the study can and cannot ask:
 
 THE TIMEZONE RULE THAT PREVENTS LOOK-AHEAD BIAS
 
-Pageview days are UTC. European exchanges close at 17:30 CET, and the count for
-UTC day D is only published around D+1 05:00-09:00 UTC. Therefore the earliest
-tradable use of day-D attention is the OPEN OF DAY D+1. Any join that lines up
-day-D attention with day-D volatility is a look-ahead bug no matter how the
-merge is written, so `daily_views` returns the series stamped with its own
-observation date and the lagging is done once, explicitly, in the panel builder.
+Pageview days are UTC, and the count for day D is published the following
+morning, around 05:00-09:00 UTC.
+
+An earlier version of this note said the earliest tradable use of day-D
+attention is "the open of day D+1". That is true only for New York. Tokyo opens
+at 00:00 UTC and Hong Kong at 01:30, both BEFORE the data exists; London and
+the continental venues open at 08:00, inside the publication window. A uniform
+one-day lag would therefore hand three quarters of this universe a number that
+was not available when their session opened -- a bug that produces a better
+backtest rather than an error.
+
+The lag is consequently derived per venue from its opening hour, in
+`features.availability_lag_days`. This module deliberately does no lagging at
+all: `daily_views` returns each series stamped with its own observation date,
+so that the shift happens exactly once, in one place, where it can be tested.
 """
 
 from __future__ import annotations

@@ -48,10 +48,17 @@ real-time Wikipedia *reading* signal at all, and the only live stream
 (EventStreams) carries page *edits*, which for a company article number a few
 per month. That question is listed as a non-goal rather than left to resurface.
 
-The timezone rule that follows is strict: pageview days are UTC, and the count
-for day `D` is not published until `D+1` morning. So the earliest tradable use
-of day-`D` attention is the **open of day `D+1`**. Lining up day-`D` attention
-with day-`D` volatility is a look-ahead bug however the merge is written.
+The timezone rule that follows is strict, and subtler than it first looks.
+Pageview days are UTC and the count for day `D` is published around `D+1`
+05:00–09:00 UTC — but Tokyo opens at 00:00 UTC and Hong Kong at 01:30, *before
+the data exists*, while London and the continental venues open at 08:00, inside
+the publication window. Only New York, at 14:30, is safely after it.
+
+An earlier version of this design said "the open of day `D+1`" for everyone.
+That would have handed three quarters of the universe a number that was not
+available when its session opened — a bug that produces a **better** backtest
+rather than an error. The lag is therefore derived per venue from its opening
+hour, and defaults to two days everywhere except the US.
 
 ### Eight languages, with one large caveat
 
@@ -223,12 +230,13 @@ src/attention_panel/
   sources.py                     every price vendor behind one interface, probed not assumed
   market.py                      bar validation; Garman-Klass, Parkinson, turnover
   macro.py                       FRED controls, aligned with an explicit publication lag
+  features.py                    attention transforms; the per-venue availability lag
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           75 tests, none of which touch the network
+tests/                           95 tests, none of which touch the network
 ```
 
-Not yet written: the panel builder, the attention transforms, the HAR baseline,
-and the significance machinery. They are specified in DESIGN.md sections 3–6.
+Not yet written: the panel assembly, the HAR baseline, and the significance
+machinery. They are specified in DESIGN.md sections 3–6.
 
 ---
 
