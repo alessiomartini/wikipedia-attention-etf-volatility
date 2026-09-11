@@ -236,13 +236,20 @@ src/attention_panel/
   fundamentals.py                earnings dates, corporate actions, share counts
   store.py                       on-disk datasets, incremental, split-aware
   panel.py                       assembly: the calendar mismatch and the lag discipline
+  validation.py                  purged walk-forward, ridge, HAR comparison (numpy only)
+  significance.py                Benjamini-Hochberg, block bootstrap, Hansen's SPA
   cli.py                         plan / validate-universe / fetch-attention / fetch-market
-tests/                           133 tests, none of which touch the network
+tests/                           167 tests, none of which touch the network
 ```
 
-Not yet written: walk-forward validation with purge and embargo, and the
-significance machinery (Benjamini–Hochberg, block bootstrap, Hansen's SPA).
-They are specified in DESIGN.md sections 5–6.
+Not yet written: the command that runs the whole thing on real fetched data and
+reports the result. Every component it needs now exists.
+
+**The modelling core uses numpy alone** — ridge has a closed form, Newey–West is
+thirty lines, and the normal CDF is `math.erf`. Depending on scikit-learn, scipy
+and statsmodels for that would put the core of the study out of reach on any
+Python new enough that those three have not shipped wheels, which is exactly the
+Python this is being run on.
 
 ---
 

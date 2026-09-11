@@ -213,11 +213,41 @@ autoregressive baseline.
 **Clark–West**; equal-predictive-accuracy via **Diebold–Mariano**.
 
 Validation is walk-forward with a **purge and embargo** between train and test
-folds (López de Prado), because the 5- and 22-day rolling windows in both target
-and features overlap the fold boundary and would otherwise leak.
+folds (López de Prado). Two panel-specific points, neither of which ordinary
+time-series validation faces:
 
-Scaling and every fitted transform live **inside** the pipeline, fitted on the
-training slice only.
+**Split by date, never by row.** A panel has many rows per date. Splitting rows
+sequentially puts LVMH's Tuesday in training and Kering's Tuesday in test — and
+attention shocks are correlated across firms on the same day, which is the very
+reason the standard errors are clustered by date. A day belongs wholly to one
+side.
+
+**Purge the label overlap.** The target on training day `t` is realised over
+`t+1…t+h`. If that window reaches into the test period, the training row saw
+test-period outcomes, so the final `h` training days are dropped, plus an
+embargo margin.
+
+**Why features can be built before splitting, and scaling cannot.** Every
+transform in this project is strictly trailing — shifted rolling means, trailing
+median and MAD, past-only weekday adjustment. A trailing window on a test row
+reaches back into training data, which is the past and is allowed; it never
+reaches forward. That is a property of the feature code rather than an
+assumption, and it is why `features.py` is written the way it is. Scaling is the
+exception: a scaler fitted before splitting carries the test set's mean and
+variance into training, which is the commonest way a walk-forward backtest is
+quietly invalidated. It is fitted per fold.
+
+**Clark–West, not Diebold–Mariano, for the primary claim.** HAR is *nested*
+inside HAR-plus-attention. The larger model estimates extra parameters whose
+true value may be zero, and that estimation noise inflates its out-of-sample
+squared error even under the null — so a straight comparison is biased against
+it and Diebold–Mariano under-rejects. Clark–West adds back the correction term.
+
+The converse error is worse and is guarded in code: applying Clark–West to
+**non-nested** forecasts does not fail quietly. For two independent forecasts
+the adjusted differential has expectation `2·var(y)` rather than zero, so the
+test rejects essentially always — in the flattering direction. `run_walk_forward`
+verifies that the feature sets nest before calling it.
 
 ---
 
@@ -236,10 +266,27 @@ Where screening *is* run, as explicit discovery:
 
 1. Universe defined objectively via Wikidata, never hand-picked.
 2. **Benjamini–Hochberg FDR** across all tests; **q-values reported, not
-   p-values**.
+   p-values** — a raw p-value from a screen is uninterpretable, because it does
+   not know how many other tests ran beside it. FDR rather than Bonferroni
+   because across 18,000 tests Bonferroni admits nothing, real effects
+   included; FDR controls the *share* of rejections that are false, which is
+   what a reader of an exploratory screen actually wants to know.
 3. **Stationary block bootstrap** (Politis–Romano) for the null distribution.
-   Classical t-tests badly overstate significance on autocorrelated series.
-4. **Hansen's SPA test** for "is the best of N better than chance?".
+   Classical t-tests treat every day as independent evidence; on autocorrelated
+   volatility data that overstates the effective sample size badly, so a
+   textbook p-value of 0.01 can correspond to a true probability above 0.05.
+   Blocks preserve the dependence instead of destroying it, and *stationary*
+   blocks — geometric lengths rather than a fixed one — remove the sensitivity
+   to an arbitrary block-length choice. The sample is recentred before
+   resampling, so the distribution is generated under H₀ rather than around the
+   observed mean.
+4. **Hansen's SPA test** for "is the best of N better than chance?". Having
+   tried twenty specifications and reported the best, its individual p-value is
+   meaningless: the maximum of twenty null draws is large by construction. SPA
+   tests the maximum directly. Hansen's *consistent* variant is used, which
+   recentres hopeless specifications to zero — keeping them, as White's earlier
+   Reality Check did, lets a portfolio of obviously terrible models inflate the
+   critical value and make the test too easy to pass.
 5. **Embargoed holdout**: the final 2 years are frozen and evaluated
    **exactly once**, at the end. Every specification choice is made without
    seeing them.
