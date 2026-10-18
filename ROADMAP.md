@@ -10,5 +10,9 @@ ogni titolo "##" è una fase, le checkbox "- [ ]" / "- [x]" danno la percentuale
 - [x] Dati: pageview Wikipedia e volatilità realizzata degli ETF
 - [x] Analisi e risultati del prototipo
 
+## Da fare
+- [ ] Finire il progetto
+
 ## Log
+- 2026-10-18: aggiunte le idee da IDEE.md (protocollo unico)
 - 2026-10-15: creata la roadmap per Projects Overview
