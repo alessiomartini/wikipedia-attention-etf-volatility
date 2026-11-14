@@ -8,6 +8,8 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error, r2_score
 
+from src.stats_tests import adf_test, diebold_mariano
+
 
 class AlternativeDataAlphaEngine:
     def __init__(self, ticker: str, wiki_page: str, start_date: str, end_date: str,
@@ -23,6 +25,8 @@ class AlternativeDataAlphaEngine:
         self.end_date = end_date
         self._prices = prices
         self._views = views
+        self._merged = None
+        self.predictions_ = None  # concatenated out-of-sample predictions, set by the backtest
 
     def fetch_market_data(self) -> pd.DataFrame:
         """Fetches daily ETF market data using yfinance (unless prices were passed in)."""
@@ -65,6 +69,7 @@ class AlternativeDataAlphaEngine:
 
         # Inner join on datetime index
         merged = market.join(alternative, how='inner').dropna()
+        self._merged = merged.copy()  # kept for the stationarity report
 
         # Create lagged features (t-1, t-2) to avoid look-ahead bias
         for lag in [1, 2]:
@@ -105,6 +110,7 @@ class AlternativeDataAlphaEngine:
         print(f"--- Running Out-of-Sample Backtest: Target -> {self.ticker} Volatility ---")
 
         rows = []
+        pred_frames = []
         for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
@@ -117,6 +123,10 @@ class AlternativeDataAlphaEngine:
                 'persistence': X_test['lag_vol_1'].to_numpy(),
                 'vol_only': vol_only.predict(X_test[vol_cols]),
             }
+
+            frame = pd.DataFrame(preds, index=y_test.index)
+            frame.insert(0, 'y_true', y_test.to_numpy())
+            pred_frames.append(frame)
 
             row = {
                 'fold': fold + 1,
@@ -136,4 +146,40 @@ class AlternativeDataAlphaEngine:
                   f"persistence RMSE {row['rmse_persistence']:.5f} R^2 {row['r2_persistence']:.4f} | "
                   f"vol-only RMSE {row['rmse_vol_only']:.5f} R^2 {row['r2_vol_only']:.4f}")
 
+        self.predictions_ = pd.concat(pred_frames)
+        return pd.DataFrame(rows)
+
+    def significance_tests(self, h: int = 1) -> pd.DataFrame:
+        """Diebold-Mariano tests on the concatenated walk-forward test predictions.
+
+        Call after run_backtest_pipeline. Squared-error loss, HLN correction,
+        Newey-West variance with h-1 lags (h = forecast horizon, 1 here).
+        Compares the full model with the vol-only Ridge and with persistence.
+        Sign convention: a NEGATIVE dm_stat means the full model has the smaller
+        squared error. Note that model vs vol-only are nested models, for which
+        the DM null distribution is only approximate: read the p-value with caution.
+        """
+        if self.predictions_ is None:
+            raise RuntimeError("run_backtest_pipeline must be called first")
+        p = self.predictions_
+        rows = []
+        for baseline in ('vol_only', 'persistence'):
+            res = diebold_mariano(p['y_true'], p['model'], p[baseline], h=h)
+            rows.append({'comparison': f'model vs {baseline}', 'n': res['n'], 'h': h,
+                         'mean_loss_diff': res['mean_loss_diff'],
+                         'dm_stat': res['stat'], 'p_value': res['p_value']})
+        return pd.DataFrame(rows)
+
+    def stationarity_tests(self) -> pd.DataFrame:
+        """ADF test (constant, AIC lag choice) on the series that enter the model.
+
+        Call after construct_design_matrix. Statistics are compared with the MacKinnon
+        asymptotic critical values; p-values are not computed.
+        """
+        if self._merged is None:
+            raise RuntimeError("construct_design_matrix must be called first")
+        rows = []
+        for col in ('log_return', 'realized_volatility', 'views_diff'):
+            res = adf_test(self._merged[col].to_numpy())
+            rows.append({'series': col, **res})
         return pd.DataFrame(rows)
