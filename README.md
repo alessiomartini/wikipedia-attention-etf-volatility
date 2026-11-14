@@ -12,10 +12,12 @@ discipline used to reach it: a non-stationary target is transformed into a
 stationary one (WHAT DOES IT MEAN?), features are lagged so no information from the future can leak
 in, and validation is walk-forward rather than shuffled.
 
-> **Status: single-file prototype.** Everything runs from one class in
-> `src/model_pipeline.py`, roughly 100 lines. There is no saved output, no test
-> suite and no CLI. Read the *Honest limitations* section before drawing any
-> conclusion from a result it prints.
+> **Status: small prototype, now with tests, a CLI and a baseline.** Everything
+> runs from one class in `src/model_pipeline.py`. `main.py` is a small CLI, the
+> backtest also reports a persistence baseline and a volatility-lags-only Ridge,
+> and `tests/` holds offline pytest tests on synthetic data. No real-data result
+> is saved in the repository. Read the *Honest limitations* section before
+> drawing any conclusion from a result it prints.
 
 ## The method
 
@@ -72,39 +74,57 @@ before splitting would leak the test set's mean and variance into training — t
 most common way a walk-forward backtest is quietly invalidated.
 
 The estimator is **Ridge** regression ($\alpha = 1.0$). (We didn't use **Lasso** just because this is an experiment. It would be an improvement to implement the combination of the two of them). Out-of-sample **RMSE**
-and **R²** are printed per fold.
+and **R²** are printed per fold, next to two baselines evaluated on the same
+folds: a **persistence** forecast ($\hat\sigma_t = \sigma_{t-1}$, nothing fitted)
+and a **vol-only** Ridge that sees only the volatility lags. The attention
+features are worth something only if the full model beats both.
 
 ## Repository layout
 
 ```
-src/model_pipeline.py   The whole project: the AlternativeDataAlphaEngine class
+src/model_pipeline.py   The AlternativeDataAlphaEngine class (data, features, backtest, baselines)
 src/__init__.py         Empty
-main.py                 Unused — still the PyCharm "print_hi" starter stub
+main.py                 Command-line entry point (argparse)
+tests/                  Offline pytest tests on synthetic data (no network)
 requirements.txt        Pinned dependency versions (see the note below)
+requirements-dev.txt    Test dependency (pytest)
 ```
 
 ## Running it
 
 ```bash
 pip install yfinance pandas numpy scikit-learn requests
-python -m src.model_pipeline
+python main.py                       # QQQ vs the Nvidia article, 2025-01-01 -> 2026-06-01
+python main.py --ticker SPY --article Apple_Inc. --start 2024-01-01 --end 2025-01-01 --out folds.csv
 ```
 
-The `__main__` block at the bottom of `model_pipeline.py` runs the worked
-example: predicting **QQQ** volatility from interest in the **Nvidia** Wikipedia
-article, over 2025-01-01 → 2026-06-01. Change the four constructor arguments to
-test another pair:
+The defaults reproduce the worked example: predicting **QQQ** volatility from
+interest in the **Nvidia** Wikipedia article. `--out` writes the per-fold metrics
+(model, persistence and vol-only RMSE and R²) to a CSV. The engine can also be
+used from Python, and accepts already-loaded data so that nothing is downloaded:
 
 ```python
 engine = AlternativeDataAlphaEngine(
-    ticker="QQQ",          # any Yahoo Finance ticker
-    wiki_page="Nvidia",    # any en.wikipedia article title
-    start_date="2025-01-01",
-    end_date="2026-06-01",
+    ticker="QQQ", wiki_page="Nvidia",
+    start_date="2025-01-01", end_date="2026-06-01",
+    prices=None,   # optional DataFrame with an 'Adj Close' column
+    views=None,    # optional DataFrame with a 'views' column
 )
 X, y = engine.construct_design_matrix()
-engine.run_backtest_pipeline(X, y)
+results = engine.run_backtest_pipeline(X, y)   # DataFrame, one row per fold
 ```
+
+### Tests
+
+```bash
+pip install pytest        # or: pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The tests use synthetic data only. They check the stationarity transforms, that
+every feature is lagged (including a case where the target depends only on
+same-day information and the model must not be able to predict it), the ordering
+of the walk-forward folds, and the baseline columns.
 
 **`requirements.txt` is encoded as UTF-16** (it was redirected from a PowerShell
 `pip freeze`), which `pip install -r` cannot read. Either install the five
@@ -124,10 +144,11 @@ over-reading a result:
 - **No stationarity test is actually run.** Log returns and first differences are
   applied because theory says they should be; no Augmented Dickey–Fuller test
   verifies it on the data at hand.
-- **No baseline comparison.** Realized volatility is strongly autocorrelated, so
-  `lag_vol_1` alone will already predict it well. Without a lags-only baseline,
-  the R² reported here says nothing about whether the *attention* features add
-  anything. This is the single most important missing piece.
+- **Baselines exist, but no significance test on the difference.** Realized
+  volatility is strongly autocorrelated, so `lag_vol_1` alone already predicts it
+  well. The backtest now reports a persistence forecast and a vol-only Ridge for
+  that reason; whether the attention features beat them by more than noise is
+  still not tested formally.
 - **No hyperparameter search and no significance test.** `alpha=1.0` is a
   default, not a choice, and a positive fold R² is not evidence of an
   exploitable effect.
@@ -139,3 +160,38 @@ over-reading a result:
   `Adj Close` column this code reads.
 - **No transaction costs, no trading rule, no strategy.** Predicting volatility
   is not the same as making money from it.
+
+## Notes on the questions in the text
+
+Short answers to the questions written in capitals above.
+
+**What does "stationary" mean?** A series is (weakly) stationary if its mean,
+variance and autocovariances do not depend on time. Prices wander: their mean and
+variance change over time (a random walk, $I(1)$), so a model fitted on one period
+describes another period badly, and regressing one trending series on another
+gives high R² and "significant" coefficients even when the two are unrelated
+(spurious regression). Differencing the log price gives returns, which are
+approximately stationary, and the same idea applies to pageviews via percentage
+changes. "Approximately" matters: volatility clusters, so returns are not
+independent, and stationarity should be checked (e.g. with an ADF test), not
+assumed.
+
+**Is walk-forward validation the standard for forecasting?** Yes. Shuffled
+$k$-fold puts future observations in the training set and past ones in the test
+set. With autocorrelated data (overlapping 5-day windows make neighbouring
+volatility values share most of their inputs) a test point has near-duplicates in
+the training set, so the score is inflated and says nothing about real
+forecasting. Walk-forward (expanding window, as in `TimeSeriesSplit`) always
+trains on the past and tests on the future, as in real use. With overlapping
+targets one may also add a gap between train and test.
+
+**Ridge, Lasso, Elastic Net.** All three are linear regression with a penalty on
+the coefficients. Ridge penalizes the sum of squares ($L_2$): it shrinks
+coefficients and handles correlated features well (here the two volatility lags
+are strongly correlated), but never sets them exactly to zero. Lasso penalizes
+the sum of absolute values ($L_1$): it can zero out coefficients, i.e. select
+features, but picks arbitrarily among correlated ones. Elastic Net mixes the two
+penalties, with a weight between them. With four features there is little to
+select, so the choice matters less than the baseline comparison; the penalty
+strength (and the mixing weight) should be chosen by cross-validation inside the
+training window, not fixed by hand.
