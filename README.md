@@ -79,10 +79,26 @@ folds: a **persistence** forecast ($\hat\sigma_t = \sigma_{t-1}$, nothing fitted
 and a **vol-only** Ridge that sees only the volatility lags. The attention
 features are worth something only if the full model beats both.
 
+### 5. Stationarity and significance tests
+
+Two tests are implemented by hand in `src/stats_tests.py` (numpy/scipy only, no
+`statsmodels`):
+
+- **Augmented Dickey–Fuller** (constant, lag order chosen by AIC) on the series
+  that enter the model: log returns, realized volatility and the pageview
+  percentage change. The statistic is compared with MacKinnon's asymptotic
+  critical values (1%: −3.43, 5%: −2.86, 10%: −2.57); p-values are not computed.
+- **Diebold–Mariano** on the concatenated walk-forward test predictions, with
+  squared-error loss, the Harvey–Leybourne–Newbold small-sample correction and a
+  Newey–West variance with $h-1$ lags ($h=1$). It compares the full model with the
+  vol-only Ridge and with persistence. A **negative** statistic means the full
+  model has the smaller squared error.
+
 ## Repository layout
 
 ```
 src/model_pipeline.py   The AlternativeDataAlphaEngine class (data, features, backtest, baselines)
+src/stats_tests.py      ADF and Diebold-Mariano tests (numpy/scipy)
 src/__init__.py         Empty
 main.py                 Command-line entry point (argparse)
 tests/                  Offline pytest tests on synthetic data (no network)
@@ -99,8 +115,10 @@ python main.py --ticker SPY --article Apple_Inc. --start 2024-01-01 --end 2025-0
 ```
 
 The defaults reproduce the worked example: predicting **QQQ** volatility from
-interest in the **Nvidia** Wikipedia article. `--out` writes the per-fold metrics
-(model, persistence and vol-only RMSE and R²) to a CSV. The engine can also be
+interest in the **Nvidia** Wikipedia article. The CLI also prints the ADF and
+Diebold–Mariano tables. `--out` writes the per-fold metrics
+(model, persistence and vol-only RMSE and R²) to a CSV, and the Diebold–Mariano
+table to a second CSV with a `_dm` suffix (`folds.csv` → `folds_dm.csv`). The engine can also be
 used from Python, and accepts already-loaded data so that nothing is downloaded:
 
 ```python
@@ -124,7 +142,9 @@ python -m pytest
 The tests use synthetic data only. They check the stationarity transforms, that
 every feature is lagged (including a case where the target depends only on
 same-day information and the model must not be able to predict it), the ordering
-of the walk-forward folds, and the baseline columns.
+of the walk-forward folds, the baseline columns, and the ADF and Diebold–Mariano
+tests (white noise and AR(1) reject a unit root, a random walk does not;
+identical forecasts give NaN; the sign convention is checked).
 
 **`requirements.txt` is encoded as UTF-16** (it was redirected from a PowerShell
 `pip freeze`), which `pip install -r` cannot read. Either install the five
@@ -141,17 +161,17 @@ over-reading a result:
 
 - **One ticker and one article per run.** There is no cross-sectional study and
   no portfolio; the engine handles a single pair at a time.
-- **No stationarity test is actually run.** Log returns and first differences are
-  applied because theory says they should be; no Augmented Dickey–Fuller test
-  verifies it on the data at hand.
-- **Baselines exist, but no significance test on the difference.** Realized
-  volatility is strongly autocorrelated, so `lag_vol_1` alone already predicts it
-  well. The backtest now reports a persistence forecast and a vol-only Ridge for
-  that reason; whether the attention features beat them by more than noise is
-  still not tested formally.
-- **No hyperparameter search and no significance test.** `alpha=1.0` is a
-  default, not a choice, and a positive fold R² is not evidence of an
-  exploitable effect.
+- **The ADF test is only a check.** It is run on each series, but it has low
+  power against persistent alternatives (realized volatility is close to a unit
+  root), uses asymptotic critical values without p-values, and says nothing about
+  structural breaks.
+- **The Diebold–Mariano test is approximate here.** The full model and the
+  vol-only Ridge are nested, for which the DM null distribution is only an
+  approximation, and the 5-day volatility windows overlap, so forecast errors are
+  autocorrelated even at $h=1$; the $h-1$ lag Newey–West variance does not
+  correct for that. Read the p-values with caution.
+- **No hyperparameter search.** `alpha=1.0` is a default, not a choice, and a
+  positive fold R² is not evidence of an exploitable effect.
 - **Wikipedia pageviews are noisy as an attention proxy** — bot traffic, news
   cycles unrelated to the asset, and article renames all show up in the series.
 - **Data sources are unstable.** The Wikimedia API expects a descriptive
