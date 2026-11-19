@@ -16,6 +16,7 @@
 | [`04_ml_extension`](notebooks/04_ml_extension.ipynb) | Gradient boosting with richer attention features; what deep learning could add |
 | [`05_intraday_extension`](notebooks/05_intraday_extension.ipynb) | Intraday realized variance (15-min bars), HAR-RV, weekday-seasonality trap, results |
 | [`06_sip_panel_earnings`](notebooks/06_sip_panel_earnings.ipynb) | Consolidated tape (SIP, 5-min, 2016-2026), panel of 15 pre-specified pairs with pooled test, earnings-window test |
+| [`07_stocks_idiosyncratic_earnings`](notebooks/07_stocks_idiosyncratic_earnings.ipynb) | 20 single stocks, idiosyncratic attention, earnings events (date check, cluster-robust test), signature plot and subsampled RV |
 
 ## Financial concepts used (short glossary; full version in notebook 01)
 
@@ -128,6 +129,15 @@ A free Alpaca key also serves the **SIP** feed (consolidated tape of all US exch
 - Pooled Clark-West over 15 pairs: p = 0.025 (one-sided), but the **mean OOS R² gain is -0.06%** and negative for 11 of 15 pairs: a statistically faint signal with no practical forecasting value.
 - Earnings reaction days (~31 per company): gains up to +5% for Nvidia (raw p = 0.015 and 0.022), but p = 0.18 / 0.24 after Holm over 12 tests. Suggestive, not significant.
 
+### Single-stock panel, idiosyncratic attention, earnings events
+
+`src/stocks.py` tests attention to a company against the realized variance of **that company's own stock** (20 large caps, SIP 5-min, list fixed in advance), with weekday and own-earnings controls ([`results/stocks_results_raw.csv`](results/stocks_results_raw.csv), [`results/stocks_results_idio.csv`](results/stocks_results_idio.csv), pooled tests in `results/stocks_pooled_*.csv`, notebook 07).
+
+- **Common-factor trap.** With raw attention the pooled Clark-West test is "hugely significant" (p = 2e-5) and Nvidia survives Holm (p = 0.013). Subtracting the cross-stock average attention change (idiosyncratic attention, which removes market-wide Wikipedia traffic movements such as holidays and summer lulls) the pooled test falls to p = 0.097, Nvidia to 0.082 after Holm, and the mean OOS R² gain is **-0.10%, negative for 19 of 20 stocks**. The raw "signal" was market-wide traffic tracking market-wide volatility.
+- **Earnings dates checked**: realized variance on reaction days is 2.4-4.1x normal for all 20 stocks, so the unofficial `yfinance` dates are reliable (SEC EDGAR was not used: it needs a personal contact e-mail in every request).
+- **Earnings reaction day** (627 stock-events): idiosyncratic attention gives +0.49% OOS R² on average (positive for 14 of 20), pooled p = 0.023 treating events as independent, **p = 0.064 after averaging within calendar weeks**; 3-day window p = 0.24-0.28. A hint that deserves a pre-registered replication, not a result (several tests were run).
+- **Microstructure noise**: signature plot shows ~20% higher mean RV at 5 than at 60 minutes. A subsampled 10-minute RV (2 offsets) leaves the conclusion unchanged; SPY/Fed stays a borderline hint (Holm p = 0.06 at 5 min, 0.04 subsampled, 0.145 in the 15-pair panel).
+
 ## Limitations
 
 - Six hand-picked pairs, linear and tree models without tuning; a null here does not rule out effects around specific events.
@@ -143,6 +153,7 @@ pip install -r requirements.txt
 python -m src.model_pipeline                    # downloads (cached in data/), writes results/
 python -m src.intraday                          # intraday extension, SIP 5-min (needs ALPACA_KEY / ALPACA_SECRET, ~25 min first run)
 python -m src.panel                             # 15-pair panel + earnings windows
+python -m src.stocks                            # 20 single stocks, raw and idiosyncratic attention
 python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 jupyter nbconvert --to notebook --execute --inplace notebooks/0*.ipynb   # re-run notebooks (needs jupyter)
 ```
@@ -152,4 +163,4 @@ Downloaded data goes to `data/` (git-ignored); `results/` holds the committed ta
 
 ## References
 
-Corsi (2009) *A simple approximate long-memory model of realized volatility*, J. Financial Econometrics. Diebold & Mariano (1995) *Comparing predictive accuracy*, JBES. Clark & West (2007) *Approximately normal tests for equal predictive accuracy in nested models*, J. Econometrics. Newey & West (1987), Econometrica. Holm (1979), Scand. J. Statistics. Campbell & Thompson (2008), RFS. Moat et al. (2013) *Quantifying Wikipedia usage patterns before stock market moves*, Sci. Rep. Preis, Moat & Stanley (2013) *Quantifying trading behavior in financial markets using Google Trends*, Sci. Rep. Mandelbrot (1963); Engle (1982). Andersen & Bollerslev (1998) *Answering the skeptics: yes, standard volatility models do provide accurate forecasts*, Int. Economic Review. Barndorff-Nielsen & Shephard (2002), JRSS-B.
+Corsi (2009) *A simple approximate long-memory model of realized volatility*, J. Financial Econometrics. Diebold & Mariano (1995) *Comparing predictive accuracy*, JBES. Clark & West (2007) *Approximately normal tests for equal predictive accuracy in nested models*, J. Econometrics. Newey & West (1987), Econometrica. Holm (1979), Scand. J. Statistics. Campbell & Thompson (2008), RFS. Moat et al. (2013) *Quantifying Wikipedia usage patterns before stock market moves*, Sci. Rep. Preis, Moat & Stanley (2013) *Quantifying trading behavior in financial markets using Google Trends*, Sci. Rep. Mandelbrot (1963); Engle (1982). Andersen & Bollerslev (1998) *Answering the skeptics: yes, standard volatility models do provide accurate forecasts*, Int. Economic Review. Barndorff-Nielsen & Shephard (2002), JRSS-B. Zhang, Mykland & Ait-Sahalia (2005) *A tale of two time scales*, JASA.
