@@ -60,6 +60,7 @@ pairs get *worse*, and the best pair (XLK/Apple) is not significant even before 
 ```bash
 python -m venv venv && venv\Scripts\activate    # Windows; use venv/bin/activate on Linux/macOS
 pip install -r requirements.txt
+python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 python -m src.model_pipeline                    # downloads (cached in data/), writes results/
 ```
 
