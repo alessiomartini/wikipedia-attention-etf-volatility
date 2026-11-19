@@ -8,6 +8,8 @@ Validation: expanding-window walk-forward, refit every REFIT days, OLS.
 Test: Diebold-Mariano on squared errors with Newey-West (HAC) standard errors,
       because 5-day windows overlap and make the errors autocorrelated.
 """
+import time
+
 import numpy as np
 import pandas as pd
 import requests
@@ -40,7 +42,11 @@ def fetch_views(page, start, end):
         s, e = start.replace("-", ""), end.replace("-", "")
         url = ("https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
                f"en.wikipedia/all-access/user/{page}/daily/{s}/{e}")
-        r = requests.get(url, headers=UA, timeout=30)
+        for wait in (0, 5, 15, 40, 90):  # Wikimedia rate-limits (429): retry with back-off
+            time.sleep(wait)
+            r = requests.get(url, headers=UA, timeout=30)
+            if r.status_code != 429:
+                break
         r.raise_for_status()
         recs = [(i["timestamp"][:8], i["views"]) for i in r.json()["items"]]
         df = pd.DataFrame(recs, columns=["date", "views"])

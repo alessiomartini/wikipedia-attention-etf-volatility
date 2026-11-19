@@ -15,6 +15,7 @@
 | [`03_significance_tests`](notebooks/03_significance_tests.ipynb) | Diebold-Mariano, Clark-West, HAC, Holm; simulation of test size |
 | [`04_ml_extension`](notebooks/04_ml_extension.ipynb) | Gradient boosting with richer attention features; what deep learning could add |
 | [`05_intraday_extension`](notebooks/05_intraday_extension.ipynb) | Intraday realized variance (15-min bars), HAR-RV, weekday-seasonality trap, results |
+| [`06_sip_panel_earnings`](notebooks/06_sip_panel_earnings.ipynb) | Consolidated tape (SIP, 5-min, 2016-2026), panel of 15 pre-specified pairs with pooled test, earnings-window test |
 
 ## Financial concepts used (short glossary; full version in notebook 01)
 
@@ -119,6 +120,14 @@ To address the main weakness of the daily design (noisy, overlapping target), `s
 
 **Finding.** Without further controls, Clark-West + Holm flags QQQ/Nvidia (p = 0.011) and XLE/Petroleum (p = 0.013): it would look like a discovery. But Wikipedia traffic and volatility both have weekday seasonality, so a "views change" feature can predict volatility just by encoding the weekday. Adding weekday dummies to *both* models cuts the gains by more than half (QQQ: 0.61% to 0.26%) and **no pair survives Holm** (best adjusted p = 0.149). Gradient boosting shows no significant gain either. What remains is a small, positive, non-significant hint on tech pairs, with low power (~800 test days, IEX is only 2-3% of volume). Details in notebook 05 and [`results/intraday_results.csv`](results/intraday_results.csv). Re-downloading the bars needs a free Alpaca account (`ALPACA_KEY`, `ALPACA_SECRET` environment variables); the bars are cached in `data/` (not committed).
 
+### Consolidated tape, panel and earnings windows (all free data)
+
+A free Alpaca key also serves the **SIP** feed (consolidated tape of all US exchanges): 5-minute bars from 2016, i.e. **1951 test days** instead of 800 (`src/intraday.py`, `results/intraday_sip_results.csv`). `src/panel.py` adds a **panel of 15 pre-specified pairs** (14 company/ETF pairs plus macro; list fixed before any result; Amazon and Meta articles excluded for broken histories after Wikipedia renames), weekday and earnings-day controls in both models, a **pooled test** and an **earnings-window test** (earnings dates from `yfinance`, unofficial). Results: [`results/panel_results.csv`](results/panel_results.csv), notebook 06.
+
+- Per pair: none significant after Holm once weekday effects are controlled (without that control, four of the original six look "significant": the same calendar artifact as above).
+- Pooled Clark-West over 15 pairs: p = 0.025 (one-sided), but the **mean OOS R² gain is -0.06%** and negative for 11 of 15 pairs: a statistically faint signal with no practical forecasting value.
+- Earnings reaction days (~31 per company): gains up to +5% for Nvidia (raw p = 0.015 and 0.022), but p = 0.18 / 0.24 after Holm over 12 tests. Suggestive, not significant.
+
 ## Limitations
 
 - Six hand-picked pairs, linear and tree models without tuning; a null here does not rule out effects around specific events.
@@ -132,7 +141,8 @@ To address the main weakness of the daily design (noisy, overlapping target), `s
 python -m venv venv && venv\Scripts\activate    # Windows; use venv/bin/activate on Linux/macOS
 pip install -r requirements.txt
 python -m src.model_pipeline                    # downloads (cached in data/), writes results/
-python -m src.intraday                          # intraday extension (needs ALPACA_KEY / ALPACA_SECRET)
+python -m src.intraday                          # intraday extension, SIP 5-min (needs ALPACA_KEY / ALPACA_SECRET, ~25 min first run)
+python -m src.panel                             # 15-pair panel + earnings windows
 python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 jupyter nbconvert --to notebook --execute --inplace notebooks/0*.ipynb   # re-run notebooks (needs jupyter)
 ```
