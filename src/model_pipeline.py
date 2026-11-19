@@ -1,185 +1,131 @@
+"""Does Wikipedia attention add out-of-sample information about ETF realized volatility?
+
+Target  y_t = log of the 5-day realized volatility (std of log returns) ending at day t.
+Features: everything is known at t-1 (strictly lagged).
+  baseline (HAR-RV style): log rv5_{t-1}, log rv22_{t-1}, log|r_{t-1}|
+  + attention            : dlog(views)_{t-1}, dlog(views)_{t-2}
+Validation: expanding-window walk-forward, refit every REFIT days, OLS.
+Test: Diebold-Mariano on squared errors with Newey-West (HAC) standard errors,
+      because 5-day windows overlap and make the errors autocorrelated.
+"""
 import numpy as np
 import pandas as pd
-import yfinance as yf
 import requests
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_squared_error, r2_score
+import statsmodels.api as sm
+import yfinance as yf
+from pathlib import Path
+from statsmodels.tsa.stattools import adfuller
 
-from src.stats_tests import adf_test, diebold_mariano
+CACHE = Path("data")
+UA = {"User-Agent": "wikipedia-attention-etf-volatility (research project)"}
+MIN_TRAIN, REFIT = 750, 21  # ~3 years of burn-in, refit monthly
+ATTN = ["views_l1", "views_l2"]
+BASE = ["rv5_l1", "rv22_l1", "absret_l1"]
 
 
-class AlternativeDataAlphaEngine:
-    def __init__(self, ticker: str, wiki_page: str, start_date: str, end_date: str,
-                 prices: pd.DataFrame = None, views: pd.DataFrame = None):
-        """prices / views: optional already-loaded raw data (offline path, used by the tests).
+def fetch_prices(ticker, start, end):
+    f = CACHE / f"{ticker}_{start}_{end}.csv"
+    if not f.exists():
+        CACHE.mkdir(exist_ok=True)
+        df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
+        df.columns = df.columns.get_level_values(0)  # newer yfinance returns a MultiIndex
+        df[["Close"]].to_csv(f)
+    return pd.read_csv(f, index_col=0, parse_dates=True)["Close"]
 
-        prices needs an 'Adj Close' column, views a 'views' column, both on a DatetimeIndex.
-        When given, nothing is downloaded.
-        """
-        self.ticker = ticker
-        self.wiki_page = wiki_page
-        self.start_date = start_date
-        self.end_date = end_date
-        self._prices = prices
-        self._views = views
-        self._merged = None
-        self.predictions_ = None  # concatenated out-of-sample predictions, set by the backtest
 
-    def fetch_market_data(self) -> pd.DataFrame:
-        """Fetches daily ETF market data using yfinance (unless prices were passed in)."""
-        if self._prices is not None:
-            df = self._prices.copy()
-        else:
-            df = yf.download(self.ticker, start=self.start_date, end=self.end_date)
-        # Calculate log returns to ensure stationarity I(0)
-        df['log_return'] = np.log(df['Adj Close'] / df['Adj Close'].shift(1))
-        df['realized_volatility'] = df['log_return'].rolling(window=5).std()
-        return df[['log_return', 'realized_volatility']].dropna()
+def fetch_views(page, start, end):
+    f = CACHE / f"wiki_{page}_{start}_{end}.csv"
+    if not f.exists():
+        CACHE.mkdir(exist_ok=True)
+        s, e = start.replace("-", ""), end.replace("-", "")
+        url = ("https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+               f"en.wikipedia/all-access/user/{page}/daily/{s}/{e}")
+        r = requests.get(url, headers=UA, timeout=30)
+        r.raise_for_status()
+        recs = [(i["timestamp"][:8], i["views"]) for i in r.json()["items"]]
+        df = pd.DataFrame(recs, columns=["date", "views"])
+        df["date"] = pd.to_datetime(df["date"], format="%Y%m%d")
+        df.set_index("date").to_csv(f)
+    return pd.read_csv(f, index_col=0, parse_dates=True)["views"]
 
-    def fetch_wikipedia_views(self) -> pd.DataFrame:
-        """Fetches daily pageviews proxy from Wikipedia API as alternative data (unless views were passed in)."""
-        if self._views is not None:
-            df = self._views.copy()
-            df['views_diff'] = df['views'].pct_change()
-            return df[['views_diff']].dropna()
 
-        # Standardized Wikimedia API format
-        formatted_start = self.start_date.replace("-", "")
-        formatted_end = self.end_date.replace("-", "")
-        url = f"https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/{self.wiki_page}/daily/{formatted_start}/{formatted_end}"
+def build(ticker, page, start, end):
+    """Returns (X, y) with every feature lagged at least one trading day."""
+    r = np.log(fetch_prices(ticker, start, end)).diff()
+    rv5 = np.log(r.rolling(5).std())
+    d = pd.DataFrame({"rv5": rv5, "rv22": np.log(r.rolling(22).std()),
+                      "absret": np.log(r.abs() + 1e-6)})
+    # Wikipedia has weekend views, ETFs don't: align on trading days, then log-diff
+    views = fetch_views(page, start, end).reindex(d.index)
+    d["views"] = np.log(views).diff()
+    X = pd.DataFrame({f"{c}_l1": d[c].shift(1) for c in ["rv5", "rv22", "absret", "views"]})
+    X["views_l2"] = d["views"].shift(2)
+    data = pd.concat([rv5.rename("y"), X], axis=1).dropna()
+    return data[BASE + ATTN], data["y"]
 
-        headers = {'User-Agent': 'QuantResearchBot/1.0 (alemarti.2001@gmail.com)'}
-        response = requests.get(url, headers=headers).json()
 
-        records = [{'date': item['timestamp'][:8], 'views': item['views']} for item in response['items']]
-        df = pd.DataFrame(records)
-        df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
-        df.set_index('date', inplace=True)
-        # Smooth and difference the alternative data to prevent spurious correlation
-        df['views_diff'] = df['views'].pct_change()
-        return df[['views_diff']].dropna()
+def walk_forward(X, y, cols):
+    """Expanding-window OLS predictions, refit every REFIT days."""
+    pred = pd.Series(np.nan, index=y.index)
+    for t0 in range(MIN_TRAIN, len(y), REFIT):
+        m = sm.OLS(y.iloc[:t0], sm.add_constant(X.iloc[:t0][cols])).fit()
+        te = slice(t0, min(t0 + REFIT, len(y)))
+        pred.iloc[te] = m.predict(sm.add_constant(X.iloc[te][cols], has_constant="add"))
+    return pred.dropna()
 
-    def construct_design_matrix(self) -> tuple:
-        """Merges datasets and generates lagged alternative data features."""
-        market = self.fetch_market_data()
-        alternative = self.fetch_wikipedia_views()
 
-        # Inner join on datetime index
-        merged = market.join(alternative, how='inner').dropna()
-        self._merged = merged.copy()  # kept for the stationarity report
+def evaluate(ticker, page, start, end):
+    X, y = build(ticker, page, start, end)
+    pb, pa = walk_forward(X, y, BASE), walk_forward(X, y, BASE + ATTN)
+    yt = y.loc[pb.index]
+    eb, ea = (yt - pb) ** 2, (yt - pa) ** 2
+    dl = eb - ea  # >0: attention model better
+    dm = sm.OLS(dl.values, np.ones(len(dl))).fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+    m = sm.OLS(y.iloc[:MIN_TRAIN], sm.add_constant(X.iloc[:MIN_TRAIN][BASE + ATTN])).fit()
+    p = dm.pvalues[0] / 2 if dm.params[0] > 0 else 1 - dm.pvalues[0] / 2
+    r2_base = 1 - eb.sum() / ((yt - yt.expanding().mean().shift(1).bfill()) ** 2).sum()
+    return dict(ticker=ticker, page=page, n_oos=len(yt),
+                r2_oos_baseline=r2_base,  # HAR baseline vs expanding-mean forecast
+                r2_oos_gain=1 - ea.sum() / eb.sum(),  # OOS R^2 of attention model vs baseline
+                dm_stat=dm.tvalues[0], p_one_sided=p,
+                adf_p_y=adfuller(y, result_object=True).pvalue,
+                adf_p_views=adfuller(X["views_l1"], result_object=True).pvalue,
+                coef_views_l1=m.params["views_l1"]), dl
 
-        # Create lagged features (t-1, t-2) to avoid look-ahead bias
-        for lag in [1, 2]:
-            merged[f'lag_views_{lag}'] = merged['views_diff'].shift(lag)
-            merged[f'lag_vol_{lag}'] = merged['realized_volatility'].shift(lag)
 
-        merged = merged.dropna()
+PAIRS = [("QQQ", "Nvidia"), ("SPY", "Federal_Reserve"), ("XLE", "Petroleum"),
+         ("XLF", "JPMorgan_Chase"), ("XLK", "Apple_Inc."), ("GLD", "Gold")]
 
-        # Features (X) and Target (y: next-day realized volatility)
-        feature_cols = ['lag_views_1', 'lag_views_2', 'lag_vol_1', 'lag_vol_2']
-        X = merged[feature_cols]
-        y = merged['realized_volatility']
+def main(start="2016-01-01", end="2026-10-31"):
+    from statsmodels.stats.multitest import multipletests
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    Path("results").mkdir(exist_ok=True)
+    rows, diffs = [], {}
+    for t, p in PAIRS:
+        row, dl = evaluate(t, p, start, end)
+        rows.append(row)
+        diffs[f"{t}/{p}"] = dl
+    df = pd.DataFrame(rows)
+    df["p_holm"] = multipletests(df["p_one_sided"], method="holm")[1]
+    df.round(5).to_csv("results/results.csv", index=False)
+    print(df.round(4).to_string(index=False))
 
-        return X, y
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    ax.bar(df["ticker"] + " " + df["page"].str[:8], 100 * df["r2_oos_gain"])
+    ax.axhline(0, color="k", lw=0.8)
+    ax.set_ylabel("OOS R$^2$ gain over HAR baseline (%)")
+    ax.set_title("Adding Wikipedia attention: out-of-sample gain")
+    fig.tight_layout(); fig.savefig("results/oos_gain.png", dpi=150)
 
-    def run_backtest_pipeline(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
-        """Executes a rigorous Time-Series Walk-Forward validation.
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    for k, dl in diffs.items():
+        dl.cumsum().plot(ax=ax, label=k, lw=1)
+    ax.axhline(0, color="k", lw=0.8)
+    ax.set_ylabel("cum. squared-error diff (>0: attention better)")
+    ax.legend(fontsize=7); fig.tight_layout(); fig.savefig("results/cum_error_diff.png", dpi=150)
 
-        Each fold compares three forecasts of the same target:
-          - model:       Ridge on all features (volatility lags + attention lags)
-          - persistence: naive forecast vol_t = vol_{t-1} (lag_vol_1), nothing fitted
-          - vol_only:    same Ridge on the volatility lags only
-        The attention features add value only if the model beats vol_only (and persistence).
-        Returns one row of metrics per fold.
-        """
-        # Avoid standard K-Fold to prevent data leakage across temporal boundaries
-        tscv = TimeSeriesSplit(n_splits=5)
 
-        vol_cols = [c for c in X.columns if c.startswith('lag_vol_')]
-
-        def make_pipeline():
-            # Scaler inside the pipeline: fitted on each fold's training slice only
-            return Pipeline([
-                ('scaler', StandardScaler()),
-                ('model', Ridge(alpha=1.0))
-            ])
-
-        print(f"--- Running Out-of-Sample Backtest: Target -> {self.ticker} Volatility ---")
-
-        rows = []
-        pred_frames = []
-        for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
-            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-            full = make_pipeline().fit(X_train, y_train)
-            vol_only = make_pipeline().fit(X_train[vol_cols], y_train)
-
-            preds = {
-                'model': full.predict(X_test),
-                'persistence': X_test['lag_vol_1'].to_numpy(),
-                'vol_only': vol_only.predict(X_test[vol_cols]),
-            }
-
-            frame = pd.DataFrame(preds, index=y_test.index)
-            frame.insert(0, 'y_true', y_test.to_numpy())
-            pred_frames.append(frame)
-
-            row = {
-                'fold': fold + 1,
-                'n_train': len(train_idx),
-                'n_test': len(test_idx),
-                'train_end': y_train.index[-1],
-                'test_start': y_test.index[0],
-                'test_end': y_test.index[-1],
-            }
-            for name, p in preds.items():
-                row[f'rmse_{name}'] = np.sqrt(mean_squared_error(y_test, p))
-                row[f'r2_{name}'] = r2_score(y_test, p)
-            rows.append(row)
-
-            print(f"Fold {fold + 1} | "
-                  f"model RMSE {row['rmse_model']:.5f} R^2 {row['r2_model']:.4f} | "
-                  f"persistence RMSE {row['rmse_persistence']:.5f} R^2 {row['r2_persistence']:.4f} | "
-                  f"vol-only RMSE {row['rmse_vol_only']:.5f} R^2 {row['r2_vol_only']:.4f}")
-
-        self.predictions_ = pd.concat(pred_frames)
-        return pd.DataFrame(rows)
-
-    def significance_tests(self, h: int = 1) -> pd.DataFrame:
-        """Diebold-Mariano tests on the concatenated walk-forward test predictions.
-
-        Call after run_backtest_pipeline. Squared-error loss, HLN correction,
-        Newey-West variance with h-1 lags (h = forecast horizon, 1 here).
-        Compares the full model with the vol-only Ridge and with persistence.
-        Sign convention: a NEGATIVE dm_stat means the full model has the smaller
-        squared error. Note that model vs vol-only are nested models, for which
-        the DM null distribution is only approximate: read the p-value with caution.
-        """
-        if self.predictions_ is None:
-            raise RuntimeError("run_backtest_pipeline must be called first")
-        p = self.predictions_
-        rows = []
-        for baseline in ('vol_only', 'persistence'):
-            res = diebold_mariano(p['y_true'], p['model'], p[baseline], h=h)
-            rows.append({'comparison': f'model vs {baseline}', 'n': res['n'], 'h': h,
-                         'mean_loss_diff': res['mean_loss_diff'],
-                         'dm_stat': res['stat'], 'p_value': res['p_value']})
-        return pd.DataFrame(rows)
-
-    def stationarity_tests(self) -> pd.DataFrame:
-        """ADF test (constant, AIC lag choice) on the series that enter the model.
-
-        Call after construct_design_matrix. Statistics are compared with the MacKinnon
-        asymptotic critical values; p-values are not computed.
-        """
-        if self._merged is None:
-            raise RuntimeError("construct_design_matrix must be called first")
-        rows = []
-        for col in ('log_return', 'realized_volatility', 'views_diff'):
-            res = adf_test(self._merged[col].to_numpy())
-            rows.append({'series': col, **res})
-        return pd.DataFrame(rows)
+if __name__ == "__main__":
+    main()

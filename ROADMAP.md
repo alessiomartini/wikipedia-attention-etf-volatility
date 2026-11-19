@@ -10,26 +10,18 @@ ogni titolo "##" è una fase, le checkbox "- [ ]" / "- [x]" danno la percentuale
 - [x] Dati: pageview Wikipedia e volatilità realizzata degli ETF
 - [x] Analisi e risultati del prototipo
 
-## Da fare
-- [ ] Finire il progetto
-  - [x] Test su dati sintetici (trasformazioni, lag, ordine dei fold, colonne baseline)
-  - [x] Baseline di persistenza e Ridge solo con lag di volatilità da battere
-  - [x] CLI con ticker/articolo/date (`main.py`)
-  - [x] Salvataggio delle metriche per fold in CSV (`--out`)
-  - [x] Risposte alle domande del README (sezione "Notes on the questions in the text")
-  - [ ] Eseguire su dati reali (appena le API non rispondono più 429) e riportare solo i risultati veri
-  - [x] Test di stazionarietà (ADF) sulle serie usate
-  - [ ] Più coppie articolo–ETF
-  - [x] Test di significatività della differenza modello vs baseline
-  - [ ] Nota finale sui limiti con i risultati reali
+## Finitura
+- [x] Pipeline riproducibile (fix yfinance, requirements UTF-8, cache dati)
+- [x] Baseline HAR-RV vs modello con attenzione, walk-forward
+- [x] Test Diebold-Mariano HAC + Holm su 6 coppie, ADF
+- [x] README in inglese con figure e risultato nullo
+- [ ] Sezione matematica nel README (Alessio)
 
 ## Decisioni e cose provate
-- L'API di Wikimedia e Yahoo risponde HTTP 429 dall'ambiente di lavoro automatico: non ho scaricato dati reali, quindi i test usano solo dati sintetici e nessun risultato reale è stato prodotto o riportato.
-- Il motore accetta DataFrame già caricati (`prices`, `views`) per poter testare offline.
-- `requirements.txt` è in UTF-16: ho messo pytest in `requirements-dev.txt` invece di modificarlo.
-- ADF e Diebold–Mariano (con correzione HLN) sono implementati a mano con numpy/scipy per non aggiungere statsmodels; per l'ADF si confronta la statistica con i valori critici asintotici di MacKinnon (nessun p-value).
+- Il 2026-11-14 una sessione automatica aveva aggiunto (senza dati reali, API in 429) classe con Ridge, ADF/DM a mano, CLI e test sintetici. Il 2026-11-19, con i dati reali scaricabili, ho sostituito tutto con una pipeline unica basata su statsmodels (HAR OLS, DM-HAC, Holm, ADF con p-value); rimossi `main.py`, `src/stats_tests.py`, i vecchi test e `requirements-dev.txt`. Nuovo test: `tests/test_no_lookahead.py` (pytest).
+- Risultato: nullo su tutte e 6 le coppie (nessun guadagno OOS significativo dell'attenzione sopra la baseline HAR). Limiti: 6 coppie scelte a mano, modello lineare, volatilità close-to-close.
 
 ## Log
-- 2026-11-14: 🤖 aggiunti baseline (persistenza e solo lag di volatilità), CLI, percorso offline, test pytest su dati sintetici e risposte alle domande nel README; aggiunti test di Diebold–Mariano (modello vs baseline) e ADF sulle serie del modello
+- 2026-11-19: progetto finito: baseline HAR, DM-HAC+Holm su 6 coppie 2016-2026, risultato nullo, README con figure; rimossa email dallo User-Agent
 - 2026-10-18: aggiunte le idee da IDEE.md (protocollo unico)
 - 2026-10-15: creata la roadmap per Projects Overview
