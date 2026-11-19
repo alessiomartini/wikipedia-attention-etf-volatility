@@ -2,67 +2,136 @@
 
 > **Short answer: no, not out-of-sample.** Adding lagged Wikipedia pageview changes to a
 > HAR-style volatility baseline gives no statistically significant gain on any of six
-> ETF/article pairs (2016–2026). This repo is the pipeline that shows it, and a null result is
-> reported as a null result.
+> ETF/article pairs (2016-2026), neither with a linear model nor with gradient boosting.
+> A weak hint on XLK/Apple (Clark-West raw p = 0.019) disappears after multiple-testing correction
+> (Holm p = 0.11). A null result is reported as a null result.
+
+**Notebooks** (executed, with figures and explanations; start here):
+
+| Notebook | Content |
+|---|---|
+| [`01_data_and_concepts`](notebooks/01_data_and_concepts.ipynb) | Financial glossary, data, volatility clustering, stationarity (ADF), first look at attention vs volatility |
+| [`02_baseline_vs_attention`](notebooks/02_baseline_vs_attention.ipynb) | HAR baseline, walk-forward validation, out-of-sample R², all pairs |
+| [`03_significance_tests`](notebooks/03_significance_tests.ipynb) | Diebold-Mariano, Clark-West, HAC, Holm; simulation of test size |
+| [`04_ml_extension`](notebooks/04_ml_extension.ipynb) | Gradient boosting with richer attention features; what deep learning could add |
+
+## Financial concepts used (short glossary; full version in notebook 01)
+
+- **ETF**: exchange-traded fund, a basket of assets traded like a stock (QQQ = Nasdaq-100, SPY = S&P 500, XLE energy, XLF financials, XLK technology, GLD gold). Liquid and diversified, hence a clean volatility signal.
+- **Adjusted close**: closing price corrected for dividends/splits, so that price changes equal investor returns.
+- **Log return**: r_t = ln(P_t / P_{t-1}); additive over time and approximately stationary.
+- **Volatility**: standard deviation of returns; the market's measure of risk (drives option prices, position sizing, VaR).
+- **Realized volatility (RV)**: volatility *measured* on past returns (here the std of the last 5 or 22 daily returns). **Implied volatility** is instead the expectation backed out of option prices (not used here, needs option data).
+- **Volatility clustering**: volatility is highly persistent (calm follows calm). It makes volatility forecastable and makes the baseline hard to beat.
+- **HAR-RV** (Corsi 2009): regression of volatility on its own daily/weekly/monthly past; the standard benchmark.
+- **Stationarity / ADF test**: a stationary series has stable moments; regressions on non-stationary (unit-root) series are spurious. ADF tests H0 = unit root.
+- **Look-ahead bias**: using information not available at forecast time; the most common reason backtests are too good.
+- **Walk-forward validation**: train on the past, test on the next block, move forward; never train on the future.
+- **Out-of-sample R²**: 1 - SSE(model)/SSE(benchmark) on unseen data; can be negative.
+- **Diebold-Mariano / Clark-West / HAC / Holm**: forecast-comparison tests, nested-model correction, autocorrelation-robust variance, multiple-testing correction. Explained in notebook 03.
 
 ## Setup
 
-- **Target**: log of the 5-day realized volatility (std of daily log returns) of an ETF, day *t*.
-- **Baseline (HAR-RV style)**: log rv5, log rv22 and log |return|, all at *t-1*. OLS.
-- **Attention model**: baseline + daily log-change of the article's pageviews at *t-1* and *t-2*.
-- **Strictly lagged features**: nothing dated *t* or later enters the design matrix.
-- **Walk-forward validation**: expanding window, 750-day burn-in, refit every 21 trading days;
-  each prediction comes from a model fitted only on the past.
-- **Test**: Diebold–Mariano on squared-error differences with Newey–West (HAC, 5 lags) standard
-  errors (the 5-day windows overlap, so errors are autocorrelated), one-sided
-  (H1: attention model better), **Holm-corrected** across the six pairs.
-- **Stationarity**: ADF test on the target and on the attention feature (all p < 0.001).
-- Data: Yahoo Finance daily adjusted closes (`yfinance`) and Wikimedia pageviews
-  (English Wikipedia, all-access, user agents), 2016-01-01 → 2026-10-31, 1950 out-of-sample days per pair.
+- **Target**: y_t = ln RV5_t, log of the std of the 5 daily log returns ending at day t.
+- **Baseline (HAR-style, OLS)**: ln RV5, ln RV22 and ln|r| at t-1.
+- **Attention model**: baseline + daily log-change of the article's pageviews at t-1 and t-2.
+- **Strictly lagged**: nothing dated t or later enters the features (checked by `tests/test_no_lookahead.py`).
+- **Walk-forward**: expanding window, 750-day burn-in, refit every 21 trading days.
+- **Tests**: Diebold-Mariano and Clark-West on squared-error differences with Newey-West (5 lags) errors, one-sided (H1: attention helps), Holm-corrected over the six pairs; ADF on target and feature.
+- **Data**: Yahoo Finance adjusted closes (`yfinance`), Wikimedia pageviews (English Wikipedia, all-access, user agents), 2016-01-01 to 2026-10-31, 1950 out-of-sample days per pair.
 
-<!-- TODO (Alessio): short math section: why log-returns / log-diff of views are I(0), definition of
-     realized volatility, the DM statistic and the HAC variance. -->
+### Mathematics in brief
+
+- Log return r_t = ln(P_t/P_{t-1}); RV5_t = sqrt( (1/4) sum_{i=0..4} (r_{t-i} - mean)^2 ).
+- HAR: y_t = b0 + b1 ln RV5_{t-1} + b2 ln RV22_{t-1} + b3 ln|r_{t-1}| + e_t, estimated by OLS on the training window only.
+- Loss differential d_t = e_base,t^2 - e_alt,t^2. DM statistic: dbar / sqrt(Var_HAC(dbar)), Newey-West variance
+  (1/n)(g0 + 2 sum_{k=1..L} (1 - k/(L+1)) g_k). Clark-West replaces d_t by e_base^2 - (e_alt^2 - (yhat_base - yhat_alt)^2) because the models are nested.
+- Holm: sort the m p-values, reject the k-th smallest if p_(k) <= alpha/(m-k+1) (and all smaller ones were rejected).
+
+Derivations and intuition are in notebooks 02 and 03.
 
 ## Results
 
-| ETF | Wikipedia article | Baseline OOS R² | Attention gain (OOS R²) | DM stat | p (one-sided) | p (Holm) |
+| ETF | Wikipedia article | Baseline R² (vs mean) | Attention gain (OOS R²) | DM p | Clark-West p | CW p (Holm) |
 |---|---|---|---|---|---|---|
-| QQQ | Nvidia | 0.757 | −0.42 % | −1.76 | 0.961 | 1.00 |
-| SPY | Federal Reserve | 0.778 | +0.04 % | 0.20 | 0.421 | 1.00 |
-| XLE | Petroleum | 0.730 | −0.14 % | −1.63 | 0.948 | 1.00 |
-| XLF | JPMorgan Chase | 0.744 | −0.12 % | −0.85 | 0.801 | 1.00 |
-| XLK | Apple Inc. | 0.740 | +0.17 % | 1.08 | 0.140 | 0.84 |
-| GLD | Gold | 0.728 | −0.12 % | −1.42 | 0.922 | 1.00 |
+| QQQ | Nvidia | 0.757 | -0.42 % | 0.961 | 0.843 | 1.00 |
+| SPY | Federal Reserve | 0.778 | +0.04 % | 0.421 | 0.099 | 0.49 |
+| XLE | Petroleum | 0.730 | -0.14 % | 0.948 | 0.921 | 1.00 |
+| XLF | JPMorgan Chase | 0.744 | -0.12 % | 0.801 | 0.430 | 1.00 |
+| XLK | Apple Inc. | 0.740 | +0.17 % | 0.140 | 0.019 | 0.11 |
+| GLD | Gold | 0.728 | -0.12 % | 0.922 | 0.835 | 1.00 |
 
-(Baseline R² is against an expanding-mean forecast; it is high because volatility is very persistent.
-Full table: [`results/results.csv`](results/results.csv).)
+Full table: [`results/results.csv`](results/results.csv); ML extension: [`results/ml_results.csv`](results/ml_results.csv).
 
 ![OOS gain](results/oos_gain.png)
 ![Cumulative error difference](results/cum_error_diff.png)
 
-**Reading.** Volatility persistence (`rv5`, `rv22`) explains almost everything. The attention
-features move the out-of-sample error by less than half a percent in either direction; four of six
-pairs get *worse*, and the best pair (XLK/Apple) is not significant even before correction
-(p = 0.14), let alone after.
+**Reading.** Volatility persistence explains almost everything (baseline R² about 0.73-0.78). Attention moves the out-of-sample error by less than half a percent either way; four of six pairs get *worse*. A simulation (notebook 03) shows DM is too conservative for nested models (rejects 0.7% of the time under a true null) while Clark-West is near its nominal size (4.7%), so the null is not an artifact of a timid test. The ML extension (notebook 04) finds the same: gradient boosting is *worse* than the linear HAR and attention features do not help it either.
+
+## Critical review: assumptions, alternatives, difficulty
+
+### Initial assumptions and how solid they are
+
+1. **Wikipedia pageviews proxy attention.** Plausible (Moat et al. 2013, Preis et al. 2013) but noisy: bot traffic, news unrelated to the asset, article renames. A company article is also an indirect proxy for an index ETF where the company is one holding among many (Nvidia is only one holding of QQQ).
+2. **One article per ETF, picked by hand.** Arbitrary; reading the answer off six pairs is already a multiple-testing situation (hence Holm).
+3. **Daily close-to-close volatility is a good volatility measure.** It is noisy. The standard now is *intraday realized volatility* from 5-minute returns, which is much more precise.
+4. **Target = RV5 ending at t, features at t-1.** Four of five returns in the target window are already in the feature `ln RV5_{t-1}`; this is a forecast of the *next window*, not strictly of "tomorrow's return". It is legitimate (no look-ahead) but it means the target is smooth and easy to predict, which inflates the baseline R² and leaves little room for any extra feature.
+5. **Linear, stable relationship; expanding window.** Assumes the relationship does not change over 10 years (it probably does: attention regimes differ between 2016 and 2024).
+6. **Log-change of views as the feature.** Removes the popularity trend but is very noisy at low view counts (large percentage swings from tiny absolute numbers).
+7. **Statistical assumption:** DM/CW need stationary loss differentials with short memory; HAC with 5 lags is a convention (the 5-day overlap), not a derived optimum.
+
+### What we could have done differently
+
+- **Intraday data** for the target (5-minute realized volatility): the single best upgrade; it shrinks the noise that currently hides small effects.
+- **Forecast a clean horizon** (next-day or next-5-days-ahead volatility with non-overlapping targets) instead of a rolling window ending today.
+- **Pooled panel over many ETF/article pairs** with a pre-registered pair list; tests the average effect with far more data and removes the "which pair" freedom.
+- **Event-based design**: attention matters mostly around earnings, launches, scandals; condition on spikes (z-score of views) rather than on all days.
+- **Better attention data**: Google Trends, news counts, edit activity, or Wikipedia views of *several* related articles.
+- **Implied volatility (VIX/option data) as benchmark**: if implied volatility already prices in the news, attention adds nothing by construction.
+- **Other baselines**: GARCH-family models, HAR with leverage/jump terms, realized-kernel estimators.
+- **Rolling instead of expanding window**, and a check for structural breaks.
+
+### What is hardest
+
+1. **Beating the benchmark, not building the model.** The hard part is the honest comparison: volatility is so persistent that any feature must add information *beyond* past volatility, and the expected effect size is tiny compared with the noise.
+2. **Inference, not prediction.** Overlapping targets, nested models and several pairs each break the textbook t-test. DM, HAC, Clark-West and Holm are all needed to avoid fooling ourselves; getting each right (and showing by simulation that the tests behave) was the most delicate part.
+3. **Avoiding look-ahead subtly.** Calendar alignment (Wikipedia has weekend views, ETFs do not), lags, scaling inside the training window, and not tuning hyper-parameters on the test period all matter.
+4. **Data fragility.** `yfinance` changes defaults (auto-adjusted prices, MultiIndex columns) and APIs rate-limit; data are cached in `data/` for reproducibility.
+
+## How machine learning / deep learning could be used
+
+Already implemented (notebook 04): **gradient-boosted trees** on baseline + richer attention features (5-day mean of views changes, 60-day z-score of log views). Result: worse than HAR, no gain from attention. Why ML underperforms here: ~2,000 daily points, near-linear persistent dynamics.
+
+Natural extensions, in order of expected value:
+
+1. **Better target first** (intraday realized volatility), then richer models.
+2. **Pooled panel model** over many ETF/article pairs with ticker embeddings (gradient boosting or a small neural net): gives the sample size ML needs and tests the average attention effect.
+3. **Sequence models (LSTM/GRU/temporal CNN)** on raw return and view sequences. Published gains over HAR are small and fragile; they require the pooled panel and nested validation for hyper-parameters (never tune on the test period).
+4. **NLP on article edit text or news** (transformer embeddings) to capture *what* is being discussed, not just how many visits.
+5. **Quantile / probabilistic forecasts** (e.g. quantile gradient boosting) to predict tail-volatility events where attention may matter more than for the mean.
+
+Caveat for all of them: more flexible models increase the risk of overfitting and of look-ahead leaks; the same walk-forward + Holm discipline applies.
 
 ## Limitations
 
-- Six hand-picked pairs, one lag structure, linear model. A null here does not rule out
-  non-linear or event-driven effects (e.g. only on attention spikes).
-- Daily close-to-close volatility is a noisy proxy; intraday realized volatility would be sharper.
-- Pageviews are a noisy attention proxy (bots, news unrelated to the asset, article renames).
+- Six hand-picked pairs, linear and tree models without tuning; a null here does not rule out effects around specific events.
+- Close-to-close volatility is a noisy proxy; no intraday data.
 - No trading rule or transaction costs: this is a forecasting test, not a strategy.
-- Earlier prototype (QQQ/Nvidia, 2025-2026 only, Ridge, no baseline) is superseded by this version;
-  its fold R² could not separate attention from plain volatility persistence.
+- The earlier prototype (QQQ/Nvidia 2025-2026, Ridge, no baseline) is superseded; its fold R² could not separate attention from volatility persistence.
 
 ## Reproduce
 
 ```bash
 python -m venv venv && venv\Scripts\activate    # Windows; use venv/bin/activate on Linux/macOS
 pip install -r requirements.txt
-python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 python -m src.model_pipeline                    # downloads (cached in data/), writes results/
+python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
+jupyter nbconvert --to notebook --execute --inplace notebooks/0*.ipynb   # re-run notebooks (needs jupyter)
 ```
 
-Everything lives in `src/model_pipeline.py`; pairs and dates are set in `PAIRS` / `main()`.
-Downloaded data goes to `data/` (git-ignored); `results/` holds the committed table and figures.
+Core code: `src/model_pipeline.py` (data, features, walk-forward, tests). Pairs and dates are set in `PAIRS` / `main()`.
+Downloaded data goes to `data/` (git-ignored); `results/` holds the committed tables and figures.
+
+## References
+
+Corsi (2009) *A simple approximate long-memory model of realized volatility*, J. Financial Econometrics. Diebold & Mariano (1995) *Comparing predictive accuracy*, JBES. Clark & West (2007) *Approximately normal tests for equal predictive accuracy in nested models*, J. Econometrics. Newey & West (1987), Econometrica. Holm (1979), Scand. J. Statistics. Campbell & Thompson (2008), RFS. Moat et al. (2013) *Quantifying Wikipedia usage patterns before stock market moves*, Sci. Rep. Preis, Moat & Stanley (2013) *Quantifying trading behavior in financial markets using Google Trends*, Sci. Rep. Mandelbrot (1963); Engle (1982).
