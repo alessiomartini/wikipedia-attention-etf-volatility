@@ -42,17 +42,24 @@ def fetch_bars(ticker, start, end, bar=BAR, feed="iex"):
     return pd.read_csv(f, parse_dates=["t"]).set_index("t")["close"]
 
 
-def daily_rv(close):
+def daily_rv(close, k=1):
     """Daily realized variance from intraday closes (regular session 09:30-16:00 New York).
-    Overnight returns are excluded: we measure intraday variation only."""
+    Overnight returns are excluded: we measure intraday variation only.
+    k>1: subsampled estimator (Zhang-Mykland-Ait-Sahalia 2005): sample every k-th bar and average the
+    RV over the k possible starting offsets, which cuts microstructure noise and estimator variance."""
     c = close.copy()
     c.index = c.index.tz_convert("America/New_York") if c.index.tz is not None else c.index
     c = c.between_time("09:30", "15:59")
     day = c.index.date
-    r = np.log(c).groupby(day).diff()  # first bar of each day has NaN: no overnight return
-    rv = (r ** 2).groupby(day).sum(min_count=1)
-    n = r.groupby(day).count()
-    rv = rv[n >= 10]  # drop half-days / days with too few bars (n counts returns)
+    lc = np.log(c)
+    rvs, n = [], None
+    for off in range(k):
+        sub = lc.groupby(day).apply(lambda x, o=off: x.iloc[o::k]).droplevel(0) if k > 1 else lc
+        r = sub.groupby(sub.index.date).diff()
+        rvs.append((r ** 2).groupby(sub.index.date).sum(min_count=1))
+        n = r.groupby(sub.index.date).count() if n is None else n
+    rv = pd.concat(rvs, axis=1).mean(axis=1)
+    rv = rv[n.reindex(rv.index) >= 10]  # drop half-days / days with too few bars (n counts returns)
     rv.index = pd.to_datetime(rv.index)
     return rv
 
@@ -60,9 +67,9 @@ def daily_rv(close):
 DOW = ["dow_1", "dow_2", "dow_3", "dow_4"]  # weekday dummies (Mon = reference): control for calendar effects
 
 
-def build_intraday(ticker, page, start, end, close=None, views=None, rich=False, bar=BAR, feed="iex"):
+def build_intraday(ticker, page, start, end, close=None, views=None, rich=False, bar=BAR, feed="iex", sub=1):
     """X, y with HAR-RV features at t-1 and target ln RV_t (one day, non-overlapping)."""
-    rv = daily_rv(fetch_bars(ticker, start, end, bar, feed) if close is None else close)
+    rv = daily_rv(fetch_bars(ticker, start, end, bar, feed) if close is None else close, sub)
     rv = rv[rv > 0]
     lrv = np.log(rv)
     d = pd.DataFrame({"rv_d": lrv,
@@ -83,9 +90,9 @@ def build_intraday(ticker, page, start, end, close=None, views=None, rich=False,
     return data[cols], data["y"]
 
 
-def evaluate_intraday(ticker, page, start, end, model="ols", dow=False, bar=BAR, feed="iex"):
+def evaluate_intraday(ticker, page, start, end, model="ols", dow=False, bar=BAR, feed="iex", sub=1):
     """dow=True adds weekday dummies to BOTH models (robustness: weekday seasonality in views and volatility)."""
-    X, y = build_intraday(ticker, page, start, end, rich=(model != "ols"), bar=bar, feed=feed)
+    X, y = build_intraday(ticker, page, start, end, rich=(model != "ols"), bar=bar, feed=feed, sub=sub)
     ctl = DOW if dow else []
     BASE_C = BASE_I + ctl
     attn = BASE_C + ATTN_I + (mp.RICH if model != "ols" else [])

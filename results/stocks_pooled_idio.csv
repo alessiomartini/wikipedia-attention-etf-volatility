@@ -1,0 +1,6 @@
+test,n,stat,p
+pooled_all_days,1951,1.29993,0.09681
+pooled_earn_reaction_day,627,2.00174,0.02266
+pooled_earn_reaction_day_week_clustered,205,1.5201,0.06424
+pooled_earn_3day_window,1874,0.5834,0.27981
+pooled_earn_3day_window_week_clustered,242,0.7137,0.23771
