@@ -14,6 +14,7 @@
 | [`02_baseline_vs_attention`](notebooks/02_baseline_vs_attention.ipynb) | HAR baseline, walk-forward validation, out-of-sample R², all pairs |
 | [`03_significance_tests`](notebooks/03_significance_tests.ipynb) | Diebold-Mariano, Clark-West, HAC, Holm; simulation of test size |
 | [`04_ml_extension`](notebooks/04_ml_extension.ipynb) | Gradient boosting with richer attention features; what deep learning could add |
+| [`05_intraday_extension`](notebooks/05_intraday_extension.ipynb) | Intraday realized variance (15-min bars), HAR-RV, weekday-seasonality trap, results |
 
 ## Financial concepts used (short glossary; full version in notebook 01)
 
@@ -82,7 +83,7 @@ Full table: [`results/results.csv`](results/results.csv); ML extension: [`result
 
 ### What we could have done differently
 
-- **Intraday data** for the target (5-minute realized volatility): the single best upgrade; it shrinks the noise that currently hides small effects.
+- **Intraday data** for the target: done in the extension below (15-minute bars); consolidated-tape 1-5 minute data would be better.
 - **Forecast a clean horizon** (next-day or next-5-days-ahead volatility with non-overlapping targets) instead of a rolling window ending today.
 - **Pooled panel over many ETF/article pairs** with a pre-registered pair list; tests the average effect with far more data and removes the "which pair" freedom.
 - **Event-based design**: attention matters mostly around earnings, launches, scandals; condition on spikes (z-score of views) rather than on all days.
@@ -112,10 +113,16 @@ Natural extensions, in order of expected value:
 
 Caveat for all of them: more flexible models increase the risk of overfitting and of look-ahead leaks; the same walk-forward + Holm discipline applies.
 
+## Intraday extension (realized variance from 15-minute bars)
+
+To address the main weakness of the daily design (noisy, overlapping target), `src/intraday.py` builds the **daily realized variance** RV_t = sum of squared 15-minute log returns in the 09:30-16:00 session (Andersen-Bollerslev 1998), from Alpaca's free IEX feed (history from 2020-07-27, about 800 test days). Target = ln RV_t, one day, non-overlapping; baseline = HAR-RV (day, 5-day and 22-day averages of past RV).
+
+**Finding.** Without further controls, Clark-West + Holm flags QQQ/Nvidia (p = 0.011) and XLE/Petroleum (p = 0.013): it would look like a discovery. But Wikipedia traffic and volatility both have weekday seasonality, so a "views change" feature can predict volatility just by encoding the weekday. Adding weekday dummies to *both* models cuts the gains by more than half (QQQ: 0.61% to 0.26%) and **no pair survives Holm** (best adjusted p = 0.149). Gradient boosting shows no significant gain either. What remains is a small, positive, non-significant hint on tech pairs, with low power (~800 test days, IEX is only 2-3% of volume). Details in notebook 05 and [`results/intraday_results.csv`](results/intraday_results.csv). Re-downloading the bars needs a free Alpaca account (`ALPACA_KEY`, `ALPACA_SECRET` environment variables); the bars are cached in `data/` (not committed).
+
 ## Limitations
 
 - Six hand-picked pairs, linear and tree models without tuning; a null here does not rule out effects around specific events.
-- Close-to-close volatility is a noisy proxy; no intraday data.
+- The daily analysis uses close-to-close volatility (noisy); the intraday extension fixes this but only has IEX bars (2-3% of volume) from mid-2020.
 - No trading rule or transaction costs: this is a forecasting test, not a strategy.
 - The earlier prototype (QQQ/Nvidia 2025-2026, Ridge, no baseline) is superseded; its fold R² could not separate attention from volatility persistence.
 
@@ -125,6 +132,7 @@ Caveat for all of them: more flexible models increase the risk of overfitting an
 python -m venv venv && venv\Scripts\activate    # Windows; use venv/bin/activate on Linux/macOS
 pip install -r requirements.txt
 python -m src.model_pipeline                    # downloads (cached in data/), writes results/
+python -m src.intraday                          # intraday extension (needs ALPACA_KEY / ALPACA_SECRET)
 python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 jupyter nbconvert --to notebook --execute --inplace notebooks/0*.ipynb   # re-run notebooks (needs jupyter)
 ```
@@ -134,4 +142,4 @@ Downloaded data goes to `data/` (git-ignored); `results/` holds the committed ta
 
 ## References
 
-Corsi (2009) *A simple approximate long-memory model of realized volatility*, J. Financial Econometrics. Diebold & Mariano (1995) *Comparing predictive accuracy*, JBES. Clark & West (2007) *Approximately normal tests for equal predictive accuracy in nested models*, J. Econometrics. Newey & West (1987), Econometrica. Holm (1979), Scand. J. Statistics. Campbell & Thompson (2008), RFS. Moat et al. (2013) *Quantifying Wikipedia usage patterns before stock market moves*, Sci. Rep. Preis, Moat & Stanley (2013) *Quantifying trading behavior in financial markets using Google Trends*, Sci. Rep. Mandelbrot (1963); Engle (1982).
+Corsi (2009) *A simple approximate long-memory model of realized volatility*, J. Financial Econometrics. Diebold & Mariano (1995) *Comparing predictive accuracy*, JBES. Clark & West (2007) *Approximately normal tests for equal predictive accuracy in nested models*, J. Econometrics. Newey & West (1987), Econometrica. Holm (1979), Scand. J. Statistics. Campbell & Thompson (2008), RFS. Moat et al. (2013) *Quantifying Wikipedia usage patterns before stock market moves*, Sci. Rep. Preis, Moat & Stanley (2013) *Quantifying trading behavior in financial markets using Google Trends*, Sci. Rep. Mandelbrot (1963); Engle (1982). Andersen & Bollerslev (1998) *Answering the skeptics: yes, standard volatility models do provide accurate forecasts*, Int. Economic Review. Barndorff-Nielsen & Shephard (2002), JRSS-B.
