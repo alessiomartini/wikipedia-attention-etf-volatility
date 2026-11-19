@@ -56,6 +56,9 @@ def daily_rv(close):
     return rv
 
 
+DOW = ["dow_1", "dow_2", "dow_3", "dow_4"]  # weekday dummies (Mon = reference): control for calendar effects
+
+
 def build_intraday(ticker, page, start, end, close=None, views=None, rich=False):
     """X, y with HAR-RV features at t-1 and target ln RV_t (one day, non-overlapping)."""
     rv = daily_rv(fetch_bars(ticker, start, end) if close is None else close)
@@ -72,21 +75,26 @@ def build_intraday(ticker, page, start, end, close=None, views=None, rich=False)
         lv = np.log(v.reindex(d.index))
         X["views_ma5_l1"] = d["views"].rolling(5).mean().shift(1)
         X["views_z_l1"] = ((lv - lv.rolling(60).mean()) / lv.rolling(60).std()).shift(1)
+    for k in range(1, 5):
+        X[f"dow_{k}"] = (X.index.dayofweek == k).astype(float)
     data = pd.concat([lrv.rename("y"), X], axis=1).dropna()
-    cols = BASE_I + ATTN_I + (mp.RICH if rich else [])
+    cols = BASE_I + ATTN_I + DOW + (mp.RICH if rich else [])
     return data[cols], data["y"]
 
 
-def evaluate_intraday(ticker, page, start, end, model="ols"):
+def evaluate_intraday(ticker, page, start, end, model="ols", dow=False):
+    """dow=True adds weekday dummies to BOTH models (robustness: weekday seasonality in views and volatility)."""
     X, y = build_intraday(ticker, page, start, end, rich=(model != "ols"))
-    attn = BASE_I + ATTN_I + (mp.RICH if model != "ols" else [])
+    ctl = DOW if dow else []
+    BASE_C = BASE_I + ctl
+    attn = BASE_C + ATTN_I + (mp.RICH if model != "ols" else [])
     refit = mp.REFIT if model == "ols" else 63
-    pb = mp.walk_forward(X, y, BASE_I, model, refit=refit)
+    pb = mp.walk_forward(X, y, BASE_C, model, refit=refit)
     pa = mp.walk_forward(X, y, attn, model, refit=refit)
     yt = y.loc[pb.index]
     res, dl = mp.compare(y, pb, pa)
     eb = (yt - pb) ** 2
-    return dict(ticker=ticker, page=page, model=model, n_oos=len(yt),
+    return dict(ticker=ticker, page=page, model=model, dow=dow, n_oos=len(yt),
                 r2_oos_baseline=1 - eb.sum() / ((yt - yt.expanding().mean().shift(1).bfill()) ** 2).sum(),
                 **res), dl
 
@@ -95,14 +103,17 @@ def main(start="2016-01-01", end="2026-10-31"):
     rows = []
     for t, p in mp.PAIRS:
         for model in ("ols", "gbm"):
-            row, _ = evaluate_intraday(t, p, start, end, model)
-            rows.append(row)
+            for dow in (False, True):
+                row, _ = evaluate_intraday(t, p, start, end, model, dow)
+                rows.append(row)
     df = pd.DataFrame(rows)
     for m in ("ols", "gbm"):
-        i = df.model == m
-        df.loc[i, "p_dm_holm"] = multipletests(df.loc[i, "p_dm"], method="holm")[1]
-        if m == "ols":  # Clark-West only valid for nested linear models
-            df.loc[i, "p_cw_holm"] = multipletests(df.loc[i, "p_cw"], method="holm")[1]
+        for dw in (False, True):
+            i = (df.model == m) & (df.dow == dw)
+            df.loc[i, "p_dm_holm"] = multipletests(df.loc[i, "p_dm"], method="holm")[1]
+            if m == "ols":  # Clark-West only valid for nested linear models
+                df.loc[i, "p_cw_holm"] = multipletests(df.loc[i, "p_cw"], method="holm")[1]
+    df.loc[df.model == "gbm", ["cw_stat", "p_cw"]] = np.nan  # Clark-West is not valid for trees
     df.round(5).to_csv("results/intraday_results.csv", index=False)
     print(df.round(4).to_string(index=False))
 
