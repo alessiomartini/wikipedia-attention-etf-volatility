@@ -57,7 +57,7 @@ def evaluate_pair(etf, page, comp, start, end, bar="5Min", feed="sip"):
         row["n_earn_days"] = int(e.sum())
         if e.sum() >= 10:
             r_e, _ = mp.compare(y, pb[e], pa[e])
-            row.update(earn_r2_gain=r_e["r2_oos_gain"], earn_cw_stat=r_e["cw_stat"], earn_p_cw=r_e["p_cw"])
+            row.update(earn_r2_gain=r_e["r2_oos_gain"], earn_r2_se=r_e["r2_gain_se"], earn_cw_stat=r_e["cw_stat"], earn_p_cw=r_e["p_cw"])
     # keep the per-date loss differential (and the CW-adjusted version) for the pooled test
     yt = y.loc[pb.index]
     cw = (yt - pb) ** 2 - ((yt - pa) ** 2 - (pb - pa) ** 2)

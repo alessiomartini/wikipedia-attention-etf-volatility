@@ -71,6 +71,10 @@ Full table: [`results/results.csv`](results/results.csv); ML extension: [`result
 
 **Reading.** Volatility persistence explains almost everything (baseline R² about 0.73-0.78). Attention moves the out-of-sample error by less than half a percent either way; four of six pairs get *worse*. A simulation (notebook 03) shows DM is too conservative for nested models (rejects 0.7% of the time under a true null) while Clark-West is near its nominal size (4.7%), so the null is not an artifact of a timid test. The ML extension (notebook 04) finds the same: gradient boosting is *worse* than the linear HAR and attention features do not help it either.
 
+### Error bars in the figures
+
+Bars are 95% intervals for the OOS R² gain: Newey-West (HAC, 5 lags) standard error of the mean squared-error difference, divided by the baseline's mean squared error (`r2_gain_se` in the CSVs). They are **Diebold-Mariano-type intervals, i.e. conservative for nested models** (the same reason DM rejects too rarely, notebook 03): an interval that includes zero does not contradict a small Clark-West p-value. What they show clearly is the *size* of the uncertainty: in the six-pair daily analysis, SIP intraday analysis, 15-pair panel and 20-stock panel **no interval excludes zero** (the only exception is one stock's earnings-day gain in the raw-attention version, 1 of 20), and the intervals are typically as wide as the gains themselves (about +/-0.3 percentage points on the daily target). Earlier versions of the figures showed point estimates only; this was an omission.
+
 ## Critical review: assumptions, alternatives, difficulty
 
 ### Initial assumptions and how solid they are

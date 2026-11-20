@@ -51,7 +51,7 @@ def evaluate_stock(tk, page, X, y, mean_views=None):
     for name, m in (("earn1", e1), ("earn3", e3)):
         if m.sum() >= 10:
             r, _ = mp.compare(y, pb[m], pa[m])
-            row.update({f"{name}_r2_gain": r["r2_oos_gain"], f"{name}_cw_stat": r["cw_stat"], f"{name}_p_cw": r["p_cw"]})
+            row.update({f"{name}_r2_gain": r["r2_oos_gain"], f"{name}_r2_se": r["r2_gain_se"], f"{name}_cw_stat": r["cw_stat"], f"{name}_p_cw": r["p_cw"]})
     return row, cw, e1, e3
 
 
