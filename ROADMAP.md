@@ -31,6 +31,7 @@ ogni titolo "##" è una fase, le checkbox "- [ ]" / "- [x]" danno la percentuale
 
 ## Log
 - 2026-11-20: barre di errore al 95% (SE HAC del guadagno R2) in tutti i grafici a barre; risultati rigenerati, p-value invariati. Nessun intervallo esclude lo zero (tranne 1 azione su 20 nel giorno earnings con attenzione grezza)
+- 2026-11-20: User-Agent delle richieste Wikimedia = URL del repo (nessun recapito personale nel codice tracciato)
 - 2026-11-19: panel di 20 azioni: con attenzione grezza p=2e-5 (falso segnale da traffico Wikipedia comune), con attenzione idiosincratica guadagno medio -0.10% e 19/20 negativi; giorno di reazione earnings +0.49% R2, p=0.064 per cluster settimanali (indizio); date earnings verificate; subsampling non cambia nulla. SEC EDGAR scartato (serve email nello User-Agent)
 - 2026-11-19: SIP 5 min dal 2016 (1951 giorni di test), panel di 15 coppie, test pooled (p=0.025 ma guadagno medio R2 -0.06%), earnings window (Nvidia p=0.18 dopo Holm): ancora nessun effetto utilizzabile
 - 2026-11-19: estensione intraday: senza controllo del giorno della settimana Clark-West+Holm darebbe QQQ/Nvidia e XLE/Petroleum significativi, con le dummy settimanali nessuna coppia sopravvive (p Holm migliore 0.149): stagionalità settimanale di visite e volatilità = falso segnale

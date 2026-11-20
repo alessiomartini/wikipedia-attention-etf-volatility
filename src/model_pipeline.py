@@ -19,7 +19,7 @@ from pathlib import Path
 from statsmodels.tsa.stattools import adfuller
 
 CACHE = Path("data")
-UA = {"User-Agent": "wikipedia-attention-etf-volatility (research project)"}
+UA = {"User-Agent": "wikipedia-attention-etf-volatility/1.0 (+https://github.com/alessiomartini/wikipedia-attention-etf-volatility)"}
 MIN_TRAIN, REFIT = 750, 21  # ~3 years of burn-in, refit monthly
 ATTN = ["views_l1", "views_l2"]
 BASE = ["rv5_l1", "rv22_l1", "absret_l1"]
