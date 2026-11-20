@@ -95,11 +95,12 @@ def walk_forward(X, y, cols, model="ols", min_train=MIN_TRAIN, refit=REFIT):
     return pred.dropna()
 
 
-def hac_mean_test(f, lags=5):
-    """One-sided test of E[f] > 0 with Newey-West standard errors. Returns (t-stat, p-value)."""
+def hac_mean_test(f, lags=5, with_se=False):
+    """One-sided test of E[f] > 0 with Newey-West standard errors. Returns (t-stat, p-value[, se of the mean])."""
     r = sm.OLS(np.asarray(f), np.ones(len(f))).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
     t = float(r.tvalues[0])
-    return t, float(r.pvalues[0] / 2 if t > 0 else 1 - r.pvalues[0] / 2)
+    out = (t, float(r.pvalues[0] / 2 if t > 0 else 1 - r.pvalues[0] / 2))
+    return out + (float(r.bse[0]),) if with_se else out
 
 
 def compare(y, p_base, p_alt):
@@ -108,9 +109,10 @@ def compare(y, p_base, p_alt):
     the bigger model adds just by estimating extra parameters; the right test for nested models."""
     yt = y.loc[p_base.index]
     eb, ea = (yt - p_base) ** 2, (yt - p_alt) ** 2
-    dm_t, dm_p = hac_mean_test(eb - ea)
+    dm_t, dm_p, se = hac_mean_test(eb - ea, with_se=True)
     cw_t, cw_p = hac_mean_test(eb - (ea - (p_base - p_alt) ** 2))
-    return dict(r2_oos_gain=1 - ea.sum() / eb.sum(), dm_stat=dm_t, p_dm=dm_p, cw_stat=cw_t, p_cw=cw_p), eb - ea
+    # SE of the R2 gain = HAC SE of mean(e_b^2 - e_a^2), scaled by mean(e_b^2) (delta method, denominator held fixed)
+    return dict(r2_oos_gain=1 - ea.sum() / eb.sum(), r2_gain_se=se / eb.mean(), dm_stat=dm_t, p_dm=dm_p, cw_stat=cw_t, p_cw=cw_p), eb - ea
 
 
 def evaluate(ticker, page, start, end):
@@ -149,10 +151,10 @@ def main(start="2016-01-01", end="2026-10-31"):
     print(df.round(4).to_string(index=False))
 
     fig, ax = plt.subplots(figsize=(7, 3.5))
-    ax.bar(df["ticker"] + " " + df["page"].str[:8], 100 * df["r2_oos_gain"])
+    ax.bar(df["ticker"] + " " + df["page"].str[:8], 100 * df["r2_oos_gain"], yerr=196 * df["r2_gain_se"], capsize=3)
     ax.axhline(0, color="k", lw=0.8)
     ax.set_ylabel("OOS R$^2$ gain over HAR baseline (%)")
-    ax.set_title("Adding Wikipedia attention: out-of-sample gain")
+    ax.set_title("Adding Wikipedia attention: OOS gain (bars: 95% HAC CI)")
     fig.tight_layout(); fig.savefig("results/oos_gain.png", dpi=150)
 
     fig, ax = plt.subplots(figsize=(7, 3.5))
