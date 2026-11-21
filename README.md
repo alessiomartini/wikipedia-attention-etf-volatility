@@ -158,6 +158,7 @@ python -m src.model_pipeline                    # downloads (cached in data/), w
 python -m src.intraday                          # intraday extension, SIP 5-min (needs ALPACA_KEY / ALPACA_SECRET, ~25 min first run)
 python -m src.panel                             # 15-pair panel + earnings windows
 python -m src.stocks                            # 20 single stocks, raw and idiosyncratic attention
+python -m src.replicate_earnings --sample new  # pre-registered replication (preregistration/; refuses to run before 2026-12-01)
 python -m pytest tests                          # optional: no-look-ahead check (needs pytest)
 jupyter nbconvert --to notebook --execute --inplace notebooks/0*.ipynb   # re-run notebooks (needs jupyter)
 ```
