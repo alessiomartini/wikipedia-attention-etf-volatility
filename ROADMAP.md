@@ -24,12 +24,15 @@ ogni titolo "##" è una fase, le checkbox "- [ ]" / "- [x]" danno la percentuale
 - [x] Dati consolidati SIP 5 min (gratis con chiave Alpaca), panel di 15 coppie prefissate con test pooled, finestre earnings + notebook 06
 - [x] Panel di 20 azioni singole, attenzione idiosincratica, finestre earnings 1 e 3 giorni, test cluster per settimana, signature plot e RV subsampled + notebook 07
 - [ ] Replica pre-registrata dell'effetto sul giorno di reazione agli earnings (altre azioni o prossimi trimestri)
+  - [x] Pre-registrazione scritta (preregistration/earnings-reaction-replication.md) e script della replica
+  - [ ] Eseguire la replica dopo 2026-12-01 (campione nuovo; campione originale dopo 2027-07-01) sui dati nuovi, senza cambiare il piano
 
 ## Decisioni e cose provate
 - Il 2026-11-14 una sessione automatica aveva aggiunto (senza dati reali, API in 429) classe con Ridge, ADF/DM a mano, CLI e test sintetici. Il 2026-11-19, con i dati reali scaricabili, ho sostituito tutto con una pipeline unica basata su statsmodels (HAR OLS, DM-HAC, Holm, ADF con p-value); rimossi `main.py`, `src/stats_tests.py`, i vecchi test e `requirements-dev.txt`. Nuovo test: `tests/test_no_lookahead.py` (pytest).
 - Risultato: nullo su tutte e 6 le coppie (nessun guadagno OOS significativo dell'attenzione sopra la baseline HAR). Aggiunto Clark-West perché DM è troppo conservativo per modelli annidati (simulazione: 0.7% vs 4.7% di rifiuti sotto H0). Con GBM non si usa CW (non valido per alberi). Intraday: IEX copre solo 2-3% del volume e parte da luglio 2020 (~800 giorni di test, poca potenza); 15 min invece di 5 perché IEX è sottile su XLE/XLF/GLD. Panel: escluse Amazon e Meta (pagine Wikipedia rinominate, storico rotto), filtro applicato prima dei risultati; date earnings da yfinance (non ufficiali). Azioni singole: 20 large cap scelte in anticipo (bias verso aziende famose). Limiti: 6 coppie scelte a mano, modello lineare, volatilità close-to-close.
 
 ## Log
+- 2026-11-21: 🤖 pre-registrazione della replica sul giorno di reazione agli earnings (20 titoli nuovi da lista fissata, test primario unico, esecuzione dal 2026-12-01) e script `src/replicate_earnings.py` con test sintetici; nessun dato nuovo analizzato
 - 2026-11-20: barre di errore al 95% (SE HAC del guadagno R2) in tutti i grafici a barre; risultati rigenerati, p-value invariati. Nessun intervallo esclude lo zero (tranne 1 azione su 20 nel giorno earnings con attenzione grezza)
 - 2026-11-20: User-Agent delle richieste Wikimedia = URL del repo (nessun recapito personale nel codice tracciato)
 - 2026-11-19: panel di 20 azioni: con attenzione grezza p=2e-5 (falso segnale da traffico Wikipedia comune), con attenzione idiosincratica guadagno medio -0.10% e 19/20 negativi; giorno di reazione earnings +0.49% R2, p=0.064 per cluster settimanali (indizio); date earnings verificate; subsampling non cambia nulla. SEC EDGAR scartato (serve email nello User-Agent)
