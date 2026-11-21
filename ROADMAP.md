@@ -1,44 +1,44 @@
 # Roadmap
 
 <!--
-Letto automaticamente da Projects Overview (https://alessiomartini.github.io/projects-overview/):
-ogni titolo "##" è una fase, le checkbox "- [ ]" / "- [x]" danno la percentuale di avanzamento,
-"## Log" è il diario (una riga per giorno, la più recente in alto).
+Read automatically by Projects Overview (https://alessiomartini.github.io/projects-overview/):
+every "##" heading is a phase, the "- [ ]" / "- [x]" checkboxes give the progress percentage,
+"## Log" is the diary (one line per day, the most recent on top).
 -->
 
-## Fatto
-- [x] Dati: pageview Wikipedia e volatilità realizzata degli ETF
-- [x] Analisi e risultati del prototipo
+## Done
+- [x] Data: Wikipedia pageviews and realized volatility of the ETFs
+- [x] Analysis and results of the prototype
 
-## Finitura
-- [x] Pipeline riproducibile (fix yfinance, requirements UTF-8, cache dati)
-- [x] Baseline HAR-RV vs modello con attenzione, walk-forward
-- [x] Test Diebold-Mariano HAC + Holm su 6 coppie, ADF
-- [x] README in inglese con figure e risultato nullo
-- [x] Sezione matematica nel README (scritta da Claude su richiesta di Alessio, da rileggere)
-- [x] Test Clark-West (modelli annidati) e simulazione della dimensione dei test
-- [x] Notebook 01-04 con glossario finanziario, visualizzazioni, matematica
-- [x] Estensione ML (gradient boosting, feature di attenzione ricche): peggio di HAR, nessun guadagno
-- [x] Revisione critica nel README: assunzioni, alternative, parte più difficile, idee ML/DL
-- [x] Estensione intraday (Alpaca IEX 15 min, RV giornaliera, HAR-RV) + notebook 05
-- [x] Dati consolidati SIP 5 min (gratis con chiave Alpaca), panel di 15 coppie prefissate con test pooled, finestre earnings + notebook 06
-- [x] Panel di 20 azioni singole, attenzione idiosincratica, finestre earnings 1 e 3 giorni, test cluster per settimana, signature plot e RV subsampled + notebook 07
-- [ ] Replica pre-registrata dell'effetto sul giorno di reazione agli earnings (altre azioni o prossimi trimestri)
-  - [x] Pre-registrazione scritta (preregistration/earnings-reaction-replication.md) e script della replica
-  - [ ] Eseguire la replica dopo 2026-12-01 (campione nuovo; campione originale dopo 2027-07-01) sui dati nuovi, senza cambiare il piano
+## Polish
+- [x] Reproducible pipeline (yfinance fix, UTF-8 requirements, data cache)
+- [x] HAR-RV baseline vs attention model, walk-forward
+- [x] Diebold-Mariano HAC test + Holm on 6 pairs, ADF
+- [x] README in English with figures and the null result
+- [x] Math section in the README (written by Claude at Alessio's request, to be reread)
+- [x] Clark-West test (nested models) and size simulation of the tests
+- [x] Notebooks 01-04 with financial glossary, visualizations, math
+- [x] ML extension (gradient boosting, rich attention features): worse than HAR, no gain
+- [x] Critical review in the README: assumptions, alternatives, hardest part, ML/DL ideas
+- [x] Intraday extension (Alpaca IEX 15 min, daily RV, HAR-RV) + notebook 05
+- [x] Consolidated SIP 5 min data (free with an Alpaca key), panel of 15 prespecified pairs with pooled test, earnings windows + notebook 06
+- [x] Panel of 20 single stocks, idiosyncratic attention, 1- and 3-day earnings windows, weekly-cluster test, signature plot and subsampled RV + notebook 07
+- [ ] Pre-registered replication of the earnings reaction-day effect (other stocks or next quarters)
+  - [x] Written pre-registration (preregistration/earnings-reaction-replication.md) and replication script
+  - [ ] Run the replication after 2026-12-01 (new sample; original sample after 2027-07-01) on the new data, without changing the plan
 
-## Decisioni e cose provate
-- Il 2026-11-14 una sessione automatica aveva aggiunto (senza dati reali, API in 429) classe con Ridge, ADF/DM a mano, CLI e test sintetici. Il 2026-11-19, con i dati reali scaricabili, ho sostituito tutto con una pipeline unica basata su statsmodels (HAR OLS, DM-HAC, Holm, ADF con p-value); rimossi `main.py`, `src/stats_tests.py`, i vecchi test e `requirements-dev.txt`. Nuovo test: `tests/test_no_lookahead.py` (pytest).
-- Risultato: nullo su tutte e 6 le coppie (nessun guadagno OOS significativo dell'attenzione sopra la baseline HAR). Aggiunto Clark-West perché DM è troppo conservativo per modelli annidati (simulazione: 0.7% vs 4.7% di rifiuti sotto H0). Con GBM non si usa CW (non valido per alberi). Intraday: IEX copre solo 2-3% del volume e parte da luglio 2020 (~800 giorni di test, poca potenza); 15 min invece di 5 perché IEX è sottile su XLE/XLF/GLD. Panel: escluse Amazon e Meta (pagine Wikipedia rinominate, storico rotto), filtro applicato prima dei risultati; date earnings da yfinance (non ufficiali). Azioni singole: 20 large cap scelte in anticipo (bias verso aziende famose). Limiti: 6 coppie scelte a mano, modello lineare, volatilità close-to-close.
+## Decisions and things tried
+- On 2026-11-14 an automatic session had added (without real data, API returning 429) a class with Ridge, hand-written ADF/DM, CLI and synthetic tests. On 2026-11-19, with the real data downloadable, I replaced everything with a single pipeline based on statsmodels (HAR OLS, DM-HAC, Holm, ADF with p-values); removed `main.py`, `src/stats_tests.py`, the old tests and `requirements-dev.txt`. New test: `tests/test_no_lookahead.py` (pytest).
+- Result: null on all 6 pairs (no significant OOS gain of attention over the HAR baseline). Added Clark-West because DM is too conservative for nested models (simulation: 0.7% vs 4.7% rejections under H0). CW is not used with GBM (not valid for trees). Intraday: IEX covers only 2-3% of the volume and starts in July 2020 (~800 test days, low power); 15 min instead of 5 because IEX is thin on XLE/XLF/GLD. Panel: Amazon and Meta excluded (Wikipedia pages renamed, broken history), filter applied before the results; earnings dates from yfinance (not official). Single stocks: 20 large caps chosen in advance (bias towards famous companies). Limits: 6 hand-picked pairs, linear model, close-to-close volatility.
 
 ## Log
-- 2026-11-21: 🤖 pre-registrazione della replica sul giorno di reazione agli earnings (20 titoli nuovi da lista fissata, test primario unico, esecuzione dal 2026-12-01) e script `src/replicate_earnings.py` con test sintetici; nessun dato nuovo analizzato
-- 2026-11-20: barre di errore al 95% (SE HAC del guadagno R2) in tutti i grafici a barre; risultati rigenerati, p-value invariati. Nessun intervallo esclude lo zero (tranne 1 azione su 20 nel giorno earnings con attenzione grezza)
-- 2026-11-20: User-Agent delle richieste Wikimedia = URL del repo (nessun recapito personale nel codice tracciato)
-- 2026-11-19: panel di 20 azioni: con attenzione grezza p=2e-5 (falso segnale da traffico Wikipedia comune), con attenzione idiosincratica guadagno medio -0.10% e 19/20 negativi; giorno di reazione earnings +0.49% R2, p=0.064 per cluster settimanali (indizio); date earnings verificate; subsampling non cambia nulla. SEC EDGAR scartato (serve email nello User-Agent)
-- 2026-11-19: SIP 5 min dal 2016 (1951 giorni di test), panel di 15 coppie, test pooled (p=0.025 ma guadagno medio R2 -0.06%), earnings window (Nvidia p=0.18 dopo Holm): ancora nessun effetto utilizzabile
-- 2026-11-19: estensione intraday: senza controllo del giorno della settimana Clark-West+Holm darebbe QQQ/Nvidia e XLE/Petroleum significativi, con le dummy settimanali nessuna coppia sopravvive (p Holm migliore 0.149): stagionalità settimanale di visite e volatilità = falso segnale
-- 2026-11-19: notebook 01-04, Clark-West + simulazione, estensione GBM, glossario finanziario e revisione critica nel README; XLK/Apple CW p=0.019 grezzo ma 0.11 dopo Holm
-- 2026-11-19: progetto finito: baseline HAR, DM-HAC+Holm su 6 coppie 2016-2026, risultato nullo, README con figure; rimossa email dallo User-Agent
-- 2026-10-18: aggiunte le idee da IDEE.md (protocollo unico)
-- 2026-10-15: creata la roadmap per Projects Overview
+- 2026-11-21: 🤖 ROADMAP translated to English (language rule: projects in English or bilingual EN/IT). 🤖 pre-registration of the replication on the earnings reaction day (20 new stocks from a fixed list, single primary test, run from 2026-12-01) and script `src/replicate_earnings.py` with synthetic tests; no new data analyzed
+- 2026-11-20: 95% error bars (HAC SE of the R2 gain) in all bar charts; results regenerated, p-values unchanged. No interval excludes zero (except 1 stock out of 20 on the earnings day with raw attention)
+- 2026-11-20: User-Agent of the Wikimedia requests = repo URL (no personal contact in the tracked code)
+- 2026-11-19: panel of 20 stocks: with raw attention p=2e-5 (false signal from common Wikipedia traffic), with idiosyncratic attention mean gain -0.10% and 19/20 negative; earnings reaction day +0.49% R2, p=0.064 with weekly clusters (hint); earnings dates verified; subsampling changes nothing. SEC EDGAR discarded (needs an email in the User-Agent)
+- 2026-11-19: SIP 5 min since 2016 (1951 test days), panel of 15 pairs, pooled test (p=0.025 but mean R2 gain -0.06%), earnings window (Nvidia p=0.18 after Holm): still no usable effect
+- 2026-11-19: intraday extension: without the day-of-week control Clark-West+Holm would give QQQ/Nvidia and XLE/Petroleum as significant, with the weekly dummies no pair survives (best Holm p 0.149): weekly seasonality of visits and volatility = false signal
+- 2026-11-19: notebooks 01-04, Clark-West + simulation, GBM extension, financial glossary and critical review in the README; XLK/Apple CW p=0.019 raw but 0.11 after Holm
+- 2026-11-19: project finished: HAR baseline, DM-HAC+Holm on 6 pairs 2016-2026, null result, README with figures; removed the email from the User-Agent
+- 2026-10-18: added the ideas from IDEE.md (single protocol)
+- 2026-10-15: created the roadmap for Projects Overview
